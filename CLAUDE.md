@@ -68,6 +68,13 @@ A two-part Windows imaging system built in Rust:
 - Session auth: server-issued tokens (online), pre-shared keys with hard expiry (offline).
 - Signed boot media is the goal — unsigned requires Secure Boot disabled on every machine.
 
+## egui 0.31 / eframe 0.31 API Notes
+
+- `Rounding::same()` takes `u8`, not `f32`. Prefer passing float literals directly to `.corner_radius(6.0)` instead.
+- `Stroke::new()` width literal needs `_f32` suffix: `Stroke::new(1.0_f32, color)`.
+- `painter().rect()` takes 5 arguments — the 5th is `StrokeKind` (e.g. `egui::StrokeKind::Outside`).
+- `Response` does not implement `Copy`. Clone before consuming: `resp.clone().on_disabled_hover_text(...)`.
+
 ## What NOT to Do
 
 - Don't add ARM64 or 32-bit support.
