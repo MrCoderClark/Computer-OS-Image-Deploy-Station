@@ -10,26 +10,26 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 0: Project Foundation
 **Branch:** `phase/00-project-foundation`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Initialize Cargo workspace (multi-crate)
 - [x] Create crate structure: `admin`, `agent`, `server`, `common`
 - [x] Set up Tauri project for admin app
 - [x] Configure shared dependencies in workspace Cargo.toml
 - [x] Add CLAUDE.md, PROGRESS.md, .gitignore
-- [ ] Initial commit on main
+- [x] Initial commit on main
 
 ---
 
 ### Phase 1: WinPE Hello World
 **Branch:** `phase/01-winpe-hello-world`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] Build a minimal Rust binary that runs in WinPE
-- [ ] Create a WinPE boot image (ADK 24H2)
+- [x] Build a minimal Rust binary that runs in WinPE
+- [x] Create a WinPE boot image (ADK 24H2)
 - [ ] Boot from USB and confirm the binary executes
-- [ ] Add basic egui/iced window (renders in WinPE)
-- [ ] Document WinPE-specific gotchas and missing DLLs
+- [x] Add basic egui/iced window (renders in WinPE)
+- [x] Document WinPE-specific gotchas and missing DLLs
 
 ---
 

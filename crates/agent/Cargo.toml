@@ -16,3 +16,4 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 eframe = "0.31"
+hostname = "0.4"
