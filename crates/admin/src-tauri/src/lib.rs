@@ -1,6 +1,11 @@
 use imaging_common::config::*;
+use imaging_common::driver::DriverPack;
+use imaging_common::sequence::{TaskSequence, TaskStep, StepType, StepConfig};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::Manager;
+use tokio::sync::RwLock;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigBuildRequest {
@@ -320,6 +325,203 @@ struct AppConfig {
     hostname: String,
 }
 
+struct SequenceStore(Arc<RwLock<Vec<TaskSequence>>>);
+struct DriverStore(Arc<RwLock<Vec<DriverPack>>>);
+
+// --- Task Sequences ---
+
+#[tauri::command]
+async fn get_sequences(store: tauri::State<'_, SequenceStore>) -> Result<Vec<TaskSequence>, String> {
+    Ok(store.0.read().await.clone())
+}
+
+#[tauri::command]
+async fn save_sequence(store: tauri::State<'_, SequenceStore>, sequence: TaskSequence) -> Result<TaskSequence, String> {
+    if let Err(errors) = sequence.validate() {
+        return Err(errors.join("; "));
+    }
+
+    let mut seqs = store.0.write().await;
+    if let Some(existing) = seqs.iter_mut().find(|s| s.id == sequence.id) {
+        let mut updated = sequence;
+        updated.updated_at = chrono::Utc::now();
+        *existing = updated.clone();
+        Ok(updated)
+    } else {
+        let mut new_seq = sequence;
+        let now = chrono::Utc::now();
+        new_seq.created_at = now;
+        new_seq.updated_at = now;
+        seqs.push(new_seq.clone());
+        Ok(new_seq)
+    }
+}
+
+#[tauri::command]
+async fn delete_sequence(store: tauri::State<'_, SequenceStore>, id: String) -> Result<(), String> {
+    let uuid: Uuid = id.parse().map_err(|e| format!("Invalid UUID: {e}"))?;
+    let mut seqs = store.0.write().await;
+    let len_before = seqs.len();
+    seqs.retain(|s| s.id != uuid);
+    if seqs.len() < len_before {
+        Ok(())
+    } else {
+        Err("Sequence not found".into())
+    }
+}
+
+#[tauri::command]
+fn new_sequence() -> TaskSequence {
+    let now = chrono::Utc::now();
+    TaskSequence {
+        id: Uuid::new_v4(),
+        name: "New Task Sequence".into(),
+        description: String::new(),
+        steps: vec![
+            TaskStep {
+                id: Uuid::new_v4(),
+                step_type: StepType::Partition,
+                name: "Partition Disk".into(),
+                enabled: true,
+                order: 0,
+                config: StepConfig::Partition {
+                    esp_size_mb: 260,
+                    msr_size_mb: 16,
+                },
+            },
+            TaskStep {
+                id: Uuid::new_v4(),
+                step_type: StepType::ApplyImage,
+                name: "Apply Image".into(),
+                enabled: true,
+                order: 1,
+                config: StepConfig::ApplyImage { image_index: 1 },
+            },
+            TaskStep {
+                id: Uuid::new_v4(),
+                step_type: StepType::Reboot,
+                name: "Reboot".into(),
+                enabled: true,
+                order: 2,
+                config: StepConfig::Reboot { delay_seconds: 0 },
+            },
+        ],
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[tauri::command]
+fn new_step(step_type: String) -> Result<TaskStep, String> {
+    let st: StepType = serde_json::from_value(serde_json::Value::String(step_type.clone()))
+        .map_err(|_| format!("Invalid step type: {step_type}"))?;
+
+    let config = match st {
+        StepType::Partition => StepConfig::Partition {
+            esp_size_mb: 260,
+            msr_size_mb: 16,
+        },
+        StepType::ApplyImage => StepConfig::ApplyImage { image_index: 1 },
+        StepType::InjectDrivers => StepConfig::InjectDrivers {
+            driver_pack_id: None,
+            driver_path: None,
+        },
+        StepType::RunScript => StepConfig::RunScript {
+            script_path: String::new(),
+            arguments: Vec::new(),
+            run_elevated: false,
+        },
+        StepType::DomainJoin => StepConfig::DomainJoin {
+            domain_name: String::new(),
+            ou_path: None,
+            account: String::new(),
+        },
+        StepType::GenerateUnattend => StepConfig::GenerateUnattend {
+            computer_name: None,
+            locale: None,
+            timezone: None,
+            product_key: None,
+        },
+        StepType::Reboot => StepConfig::Reboot { delay_seconds: 0 },
+    };
+
+    Ok(TaskStep {
+        id: Uuid::new_v4(),
+        step_type: st,
+        name: format!("{st}"),
+        enabled: true,
+        order: 0,
+        config,
+    })
+}
+
+// --- Driver Packs ---
+
+#[tauri::command]
+async fn get_driver_packs(store: tauri::State<'_, DriverStore>) -> Result<Vec<DriverPack>, String> {
+    Ok(store.0.read().await.clone())
+}
+
+#[tauri::command]
+async fn save_driver_pack(store: tauri::State<'_, DriverStore>, pack: DriverPack) -> Result<DriverPack, String> {
+    let mut packs = store.0.write().await;
+    if let Some(existing) = packs.iter_mut().find(|p| p.id == pack.id) {
+        *existing = pack.clone();
+        Ok(pack)
+    } else {
+        let mut new_pack = pack;
+        new_pack.created_at = chrono::Utc::now();
+        packs.push(new_pack.clone());
+        Ok(new_pack)
+    }
+}
+
+#[tauri::command]
+async fn delete_driver_pack(store: tauri::State<'_, DriverStore>, id: String) -> Result<(), String> {
+    let uuid: Uuid = id.parse().map_err(|e| format!("Invalid UUID: {e}"))?;
+    let mut packs = store.0.write().await;
+    let len_before = packs.len();
+    packs.retain(|p| p.id != uuid);
+    if packs.len() < len_before {
+        Ok(())
+    } else {
+        Err("Driver pack not found".into())
+    }
+}
+
+// --- Unattend Preview ---
+
+#[tauri::command]
+fn preview_unattend(config: UnattendRequest) -> Result<String, String> {
+    let uc = imaging_engine::unattend::UnattendConfig {
+        computer_name: config.computer_name,
+        locale: config.locale.unwrap_or_else(|| "en-US".into()),
+        timezone: config.timezone.unwrap_or_else(|| "Eastern Standard Time".into()),
+        product_key: config.product_key,
+        admin_password: None,
+        domain_join: config.domain_name.map(|dn| {
+            imaging_engine::unattend::DomainJoinConfig {
+                domain_name: dn,
+                ou_path: config.ou_path,
+                account: config.domain_account.unwrap_or_default(),
+                password: String::new(),
+            }
+        }),
+    };
+    imaging_engine::unattend::generate_unattend_xml(&uc).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UnattendRequest {
+    pub computer_name: Option<String>,
+    pub locale: Option<String>,
+    pub timezone: Option<String>,
+    pub product_key: Option<String>,
+    pub domain_name: Option<String>,
+    pub ou_path: Option<String>,
+    pub domain_account: Option<String>,
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -338,6 +540,8 @@ pub fn run() {
                 server_port: 7443,
                 hostname,
             });
+            app.manage(SequenceStore(Arc::new(RwLock::new(Vec::new()))));
+            app.manage(DriverStore(Arc::new(RwLock::new(Vec::new()))));
 
             Ok(())
         })
@@ -350,6 +554,15 @@ pub fn run() {
             validate_config,
             list_usb_devices,
             build_media,
+            get_sequences,
+            save_sequence,
+            delete_sequence,
+            new_sequence,
+            new_step,
+            get_driver_packs,
+            save_driver_pack,
+            delete_driver_pack,
+            preview_unattend,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
