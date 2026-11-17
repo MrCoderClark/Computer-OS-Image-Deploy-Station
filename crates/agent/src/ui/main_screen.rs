@@ -71,10 +71,43 @@ fn image_panel(ui: &mut egui::Ui, app: &AgentApp) {
                             ui.label(hash_status);
                             ui.end_row();
                         });
+                } else if !app.server_images.is_empty() {
+                    let img = &app.server_images[0];
+                    ui.label(theme::heading(&img.name));
+                    ui.label(
+                        egui::RichText::new("From server")
+                            .size(10.0)
+                            .color(theme::ACCENT),
+                    );
+                    ui.add_space(8.0);
+
+                    egui::Grid::new("server_image_details")
+                        .num_columns(2)
+                        .spacing([40.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label(theme::label("OS FAMILY"));
+                            ui.label(theme::label("BUILD DATE"));
+                            ui.end_row();
+
+                            ui.label(theme::body(&img.os_family.to_string()));
+                            ui.label(theme::body(
+                                img.build_date.as_deref().unwrap_or("Unknown"),
+                            ));
+                            ui.end_row();
+
+                            ui.label(theme::label("SIZE"));
+                            ui.label(theme::label("IMAGES AVAILABLE"));
+                            ui.end_row();
+
+                            let size = format!("{:.1} GB", img.size_bytes as f64 / 1_073_741_824.0);
+                            ui.label(theme::body(&size));
+                            ui.label(theme::body(&format!("{}", app.server_images.len())));
+                            ui.end_row();
+                        });
                 } else {
                     ui.label(theme::heading("No Image Loaded"));
                     ui.add_space(4.0);
-                    ui.label(theme::body("Online mode — image will stream from server"));
+                    ui.label(theme::body("Online mode — connecting to server..."));
                 }
             } else {
                 ui.label(theme::heading("No Configuration"));

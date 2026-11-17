@@ -23,11 +23,11 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 1: WinPE Hello World
 **Branch:** `phase/01-winpe-hello-world`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Build a minimal Rust binary that runs in WinPE
 - [x] Create a WinPE boot image (ADK 24H2)
-- [ ] Boot from USB and confirm the binary executes
+- [ ] Boot from USB and confirm the binary executes *(manual — requires ADK + VM)*
 - [x] Add basic egui/iced window (renders in WinPE)
 - [x] Document WinPE-specific gotchas and missing DLLs
 
@@ -35,13 +35,13 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 2: Network Connectivity
 **Branch:** `phase/02-network-connectivity`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] Server skeleton (axum or tonic) — health endpoint
-- [ ] Agent connects to server, pulls image list
-- [ ] Discovery protocol (DNS SRV → DHCP → config fallback)
-- [ ] TLS setup for control channel
-- [ ] Session authentication (server-issued token)
+- [x] Server skeleton (axum or tonic) — health endpoint
+- [x] Agent connects to server, pulls image list
+- [x] Discovery protocol (config fallback; DNS SRV + DHCP deferred)
+- [ ] TLS setup for control channel *(deferred — HTTP for dev, TLS in Phase 11)*
+- [x] Session authentication (server-issued token)
 
 ---
 
