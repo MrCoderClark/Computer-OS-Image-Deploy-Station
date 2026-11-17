@@ -405,6 +405,111 @@
       color: var(--text-muted);
       font-size: 14px;
     }
+
+    /* Wizard */
+    .wizard-steps {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 24px;
+      align-items: center;
+    }
+    .wizard-step {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .wizard-step.active { color: var(--accent); font-weight: 600; }
+    .wizard-step.done { color: var(--success); }
+    .step-num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      border: 2px solid var(--surface-border);
+      color: var(--text-muted);
+    }
+    .wizard-step.active .step-num {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    .wizard-step.done .step-num {
+      border-color: var(--success);
+      background: var(--success);
+      color: #fff;
+    }
+    .step-line {
+      width: 32px;
+      height: 2px;
+      background: var(--surface-border);
+      margin: 0 4px;
+    }
+    .wizard-content {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      padding: 24px;
+      min-height: 240px;
+    }
+    .wizard-nav {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 16px;
+    }
+    .radio-group { display: flex; flex-direction: column; gap: 8px; }
+    .radio-option {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .radio-option:hover { border-color: var(--accent); }
+    .radio-option.selected {
+      border-color: var(--accent);
+      background: var(--accent-bg);
+    }
+    .radio-option input { margin: 0; }
+    .radio-label { font-size: 14px; font-weight: 500; }
+    .radio-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .image-pick {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 6px;
+    }
+    .image-pick:hover { border-color: var(--accent); }
+    .image-pick.selected { border-color: var(--accent); background: var(--accent-bg); }
+    .image-pick-name { font-weight: 500; font-size: 14px; }
+    .image-pick-meta { font-size: 12px; color: var(--text-muted); }
+    .usb-pick {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 6px;
+    }
+    .usb-pick:hover { border-color: var(--accent); }
+    .usb-pick.selected { border-color: var(--accent); background: var(--accent-bg); }
+    .build-summary { font-size: 13px; line-height: 1.8; }
+    .build-summary strong { font-weight: 600; }
   </style>
 </head>
 <body>
@@ -539,10 +644,112 @@
       <div class="empty-state">Task sequence editor will be available in a future phase.</div>
     </div>
 
-    <!-- Build Media (placeholder) -->
+    <!-- Build Media Wizard -->
     <div class="page" id="page-media">
       <h1 class="page-title">Build Bootable USB</h1>
-      <div class="empty-state">USB media builder wizard will be available in Phase 7.</div>
+      <div class="wizard-steps" id="wizard-steps">
+        <div class="wizard-step active" data-step="1"><span class="step-num">1</span> Mode</div>
+        <div class="step-line"></div>
+        <div class="wizard-step" data-step="2"><span class="step-num">2</span> Image</div>
+        <div class="step-line"></div>
+        <div class="wizard-step" data-step="3"><span class="step-num">3</span> Target</div>
+        <div class="step-line"></div>
+        <div class="wizard-step" data-step="4"><span class="step-num">4</span> Config</div>
+        <div class="step-line"></div>
+        <div class="wizard-step" data-step="5"><span class="step-num">5</span> Build</div>
+      </div>
+
+      <!-- Step 1: Mode -->
+      <div class="wizard-content wizard-panel" id="wiz-step-1">
+        <h3 style="margin-bottom:4px">Select Operating Mode</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+          Mode is a build-time property. Once built, the stick's mode cannot change without a rebuild.
+        </p>
+        <div class="radio-group" id="mode-group">
+          <label class="radio-option selected" data-value="hybrid">
+            <input type="radio" name="wiz-mode" value="hybrid" checked>
+            <div>
+              <div class="radio-label">Hybrid (recommended)</div>
+              <div class="radio-desc">Try server, fall back to USB image. Best for most environments.</div>
+            </div>
+          </label>
+          <label class="radio-option" data-value="online">
+            <input type="radio" name="wiz-mode" value="online">
+            <div>
+              <div class="radio-label">Online</div>
+              <div class="radio-desc">Stream image from server. Smallest USB, requires network.</div>
+            </div>
+          </label>
+          <label class="radio-option" data-value="offline">
+            <input type="radio" name="wiz-mode" value="offline">
+            <div>
+              <div class="radio-label">Offline</div>
+              <div class="radio-desc">Image on USB. No network required, larger stick needed.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Step 2: Image -->
+      <div class="wizard-content wizard-panel" id="wiz-step-2" style="display:none">
+        <h3 style="margin-bottom:4px">Select Image</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+          Choose the WIM image for this USB stick.
+        </p>
+        <div id="wiz-image-list"></div>
+      </div>
+
+      <!-- Step 3: Target -->
+      <div class="wizard-content wizard-panel" id="wiz-step-3" style="display:none">
+        <h3 style="margin-bottom:4px">Select USB Target</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+          Choose the removable drive to write to. All data on this drive will be erased.
+        </p>
+        <div id="wiz-usb-list"></div>
+        <button class="btn" id="refresh-usb" style="margin-top:8px">Refresh drives</button>
+      </div>
+
+      <!-- Step 4: Config -->
+      <div class="wizard-content wizard-panel" id="wiz-step-4" style="display:none">
+        <h3 style="margin-bottom:4px">Configuration</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+          Review and adjust settings for this media.
+        </p>
+        <div class="form-row">
+          <label class="form-label">Server Host</label>
+          <input class="form-input" id="wiz-host" value="127.0.0.1">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Server Port</label>
+          <input class="form-input" id="wiz-port" type="number" value="7443">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Capture UNC</label>
+          <input class="form-input" id="wiz-unc" placeholder="\\\\fileserver\\captures">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Service Account</label>
+          <input class="form-input" id="wiz-account" placeholder="DOMAIN\\svc-imaging">
+        </div>
+      </div>
+
+      <!-- Step 5: Build -->
+      <div class="wizard-content wizard-panel" id="wiz-step-5" style="display:none">
+        <h3 style="margin-bottom:4px">Review & Build</h3>
+        <div class="build-summary" id="build-summary"></div>
+        <div id="build-progress" style="display:none;margin-top:16px">
+          <div style="font-size:13px;margin-bottom:8px" id="build-status">Building...</div>
+          <div style="height:6px;background:var(--surface-border);border-radius:3px;overflow:hidden">
+            <div id="build-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s"></div>
+          </div>
+        </div>
+        <div id="build-result" style="display:none;margin-top:16px;font-size:13px"></div>
+      </div>
+
+      <div class="wizard-nav">
+        <button class="btn" id="wiz-back" style="visibility:hidden">Back</button>
+        <button class="btn btn-primary" id="wiz-next">Next: Select Image</button>
+      </div>
     </div>
 
     <!-- Deployments (placeholder) -->
@@ -781,6 +988,222 @@
     }
 
     init();
+
+    // === Build Media Wizard ===
+    let wizStep = 1;
+    let wizMode = 'hybrid';
+    let wizImage = null;
+    let wizUsb = null;
+    let wizBuilding = false;
+
+    const wizStepLabels = ['', 'Next: Select Image', 'Next: Select Target', 'Next: Configuration', 'Next: Review', 'Build Media'];
+
+    function updateWizardUI() {
+      // Step indicators
+      document.querySelectorAll('.wizard-step').forEach(el => {
+        const s = parseInt(el.dataset.step);
+        el.classList.remove('active', 'done');
+        if (s === wizStep) el.classList.add('active');
+        else if (s < wizStep) el.classList.add('done');
+      });
+
+      // Show/hide panels
+      document.querySelectorAll('.wizard-panel').forEach(el => el.style.display = 'none');
+      const panel = document.getElementById('wiz-step-' + wizStep);
+      if (panel) panel.style.display = '';
+
+      // Nav buttons
+      document.getElementById('wiz-back').style.visibility = wizStep > 1 && !wizBuilding ? 'visible' : 'hidden';
+      const nextBtn = document.getElementById('wiz-next');
+
+      if (wizStep === 5 && wizBuilding) {
+        nextBtn.style.display = 'none';
+      } else if (wizStep === 5) {
+        nextBtn.textContent = 'Build Media';
+        nextBtn.style.display = '';
+        nextBtn.disabled = false;
+      } else {
+        nextBtn.textContent = wizStepLabels[wizStep];
+        nextBtn.style.display = '';
+        nextBtn.disabled = false;
+      }
+
+      // Skip image step for online mode
+      if (wizStep === 2 && wizMode === 'online') {
+        document.querySelector('#wiz-step-2 p').textContent = 'Online mode streams from the server. No image needed on USB.';
+        document.getElementById('wiz-image-list').innerHTML = '<div class="empty-state" style="padding:16px">Skipped — online mode uses server images</div>';
+      }
+    }
+
+    // Mode radio selection
+    document.querySelectorAll('#mode-group .radio-option').forEach(opt => {
+      opt.addEventListener('click', () => {
+        document.querySelectorAll('#mode-group .radio-option').forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+        opt.querySelector('input').checked = true;
+        wizMode = opt.dataset.value;
+      });
+    });
+
+    // Next button
+    document.getElementById('wiz-next').addEventListener('click', async () => {
+      if (wizStep === 5) {
+        await startBuild();
+        return;
+      }
+
+      // Validation
+      if (wizStep === 2 && wizMode !== 'online' && !wizImage) {
+        alert('Please select an image.');
+        return;
+      }
+      if (wizStep === 3 && !wizUsb) {
+        alert('Please select a USB drive.');
+        return;
+      }
+
+      wizStep++;
+
+      // Load data for the new step
+      if (wizStep === 2) loadWizImages();
+      if (wizStep === 3) loadWizUsb();
+      if (wizStep === 5) renderBuildSummary();
+
+      updateWizardUI();
+    });
+
+    // Back button
+    document.getElementById('wiz-back').addEventListener('click', () => {
+      if (wizStep > 1) {
+        wizStep--;
+        updateWizardUI();
+      }
+    });
+
+    function loadWizImages() {
+      const container = document.getElementById('wiz-image-list');
+      if (wizMode === 'online') return;
+
+      if (allImages.length === 0) {
+        container.innerHTML = '<div class="empty-state">No images available. Connect to server first.</div>';
+        return;
+      }
+
+      container.innerHTML = allImages.map(img => `
+        <div class="image-pick${wizImage && wizImage.id === img.id ? ' selected' : ''}" data-id="${img.id}">
+          <div>
+            <div class="image-pick-name">${img.name} ${osBadge(img.os_family)}</div>
+            <div class="image-pick-meta">${formatBytes(img.size_bytes)} &middot; ${img.build_date || '—'} &middot; ${img.captured_from || '—'}</div>
+          </div>
+        </div>
+      `).join('');
+
+      container.querySelectorAll('.image-pick').forEach(el => {
+        el.addEventListener('click', () => {
+          container.querySelectorAll('.image-pick').forEach(p => p.classList.remove('selected'));
+          el.classList.add('selected');
+          wizImage = allImages.find(i => i.id === el.dataset.id);
+        });
+      });
+    }
+
+    async function loadWizUsb() {
+      const container = document.getElementById('wiz-usb-list');
+      container.innerHTML = '<div class="empty-state" style="padding:16px">Scanning drives...</div>';
+
+      try {
+        const devices = await invoke('list_usb_devices');
+        if (devices.length === 0) {
+          container.innerHTML = '<div class="empty-state" style="padding:16px">No removable USB drives detected. Insert a USB drive and click Refresh.</div>';
+          return;
+        }
+
+        container.innerHTML = devices.map(d => `
+          <div class="usb-pick${wizUsb && wizUsb.drive_letter === d.drive_letter ? ' selected' : ''}" data-drive="${d.drive_letter}">
+            <div>
+              <strong>${d.drive_letter}</strong> ${d.label || 'Removable Disk'}
+              <div style="font-size:12px;color:var(--text-muted)">${formatBytes(d.size_bytes)}</div>
+            </div>
+          </div>
+        `).join('');
+
+        container.querySelectorAll('.usb-pick').forEach(el => {
+          el.addEventListener('click', () => {
+            container.querySelectorAll('.usb-pick').forEach(p => p.classList.remove('selected'));
+            el.classList.add('selected');
+            wizUsb = devices.find(d => d.drive_letter === el.dataset.drive);
+          });
+        });
+      } catch (e) {
+        container.innerHTML = `<div class="empty-state" style="padding:16px;color:var(--error)">Failed to scan drives: ${e}</div>`;
+      }
+    }
+
+    document.getElementById('refresh-usb').addEventListener('click', () => loadWizUsb());
+
+    function renderBuildSummary() {
+      const el = document.getElementById('build-summary');
+      const modeLabel = { online: 'Online', offline: 'Offline', hybrid: 'Hybrid' }[wizMode] || wizMode;
+      el.innerHTML = `
+        <strong>Mode:</strong> ${modeLabel}<br>
+        <strong>Image:</strong> ${wizMode === 'online' ? '(streamed from server)' : (wizImage ? wizImage.name : '—')}<br>
+        <strong>Target:</strong> ${wizUsb ? wizUsb.drive_letter + ' ' + (wizUsb.label || 'Removable Disk') + ' (' + formatBytes(wizUsb.size_bytes) + ')' : '—'}<br>
+        <strong>Server:</strong> ${document.getElementById('wiz-host').value}:${document.getElementById('wiz-port').value}<br>
+        ${document.getElementById('wiz-unc').value ? '<strong>Capture Share:</strong> ' + document.getElementById('wiz-unc').value + '<br>' : ''}
+      `;
+      document.getElementById('build-progress').style.display = 'none';
+      document.getElementById('build-result').style.display = 'none';
+    }
+
+    async function startBuild() {
+      if (!wizUsb) { alert('No USB drive selected.'); return; }
+
+      wizBuilding = true;
+      updateWizardUI();
+
+      const progressEl = document.getElementById('build-progress');
+      const barEl = document.getElementById('build-bar');
+      const statusEl = document.getElementById('build-status');
+      const resultEl = document.getElementById('build-result');
+
+      progressEl.style.display = '';
+      statusEl.textContent = 'Preparing media...';
+      barEl.style.width = '20%';
+
+      try {
+        barEl.style.width = '50%';
+        statusEl.textContent = 'Writing configuration...';
+
+        const result = await invoke('build_media', {
+          request: {
+            mode: wizMode,
+            image_id: wizImage ? wizImage.id : null,
+            image_name: wizImage ? wizImage.name : null,
+            image_os_family: wizImage ? wizImage.os_family : null,
+            drive_letter: wizUsb.drive_letter,
+            server_host: document.getElementById('wiz-host').value || null,
+            server_port: parseInt(document.getElementById('wiz-port').value) || null,
+            discovery: 'fixed',
+            capture_unc_path: document.getElementById('wiz-unc').value || null,
+            capture_account: document.getElementById('wiz-account').value || null,
+          }
+        });
+
+        barEl.style.width = '100%';
+        statusEl.textContent = 'Complete';
+        resultEl.style.display = '';
+        resultEl.innerHTML = `<span style="color:var(--success)">&#10003;</span> ${result}`;
+      } catch (e) {
+        barEl.style.width = '100%';
+        barEl.style.background = 'var(--error)';
+        statusEl.textContent = 'Failed';
+        resultEl.style.display = '';
+        resultEl.innerHTML = `<span style="color:var(--error)">&#10007; ${e}</span>`;
+      }
+
+      wizBuilding = false;
+      document.getElementById('wiz-next').style.display = 'none';
+    }
   </script>
 </body>
 </html>
