@@ -117,6 +117,13 @@ impl AgentApp {
         self.config.as_ref().map(|c| c.mode)
     }
 
+    pub fn resolve_deploy_provider(&self) -> Result<(std::path::PathBuf, u32), String> {
+        let config = self.config.as_ref().ok_or("No configuration loaded")?;
+        let provider = imaging_engine::provider::create_provider(config)
+            .map_err(|e| format!("Failed to create image provider: {e}"))?;
+        Ok((provider.wim_path().to_path_buf(), provider.image_index()))
+    }
+
     pub fn start_deploy(&mut self, target_disk: u32, wim_path: std::path::PathBuf, image_index: u32) {
         let job_id = uuid::Uuid::new_v4();
         let tx = self.net_tx.clone();

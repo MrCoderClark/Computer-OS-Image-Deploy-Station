@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuiteConfig {
     pub schema_version: u32,
@@ -12,6 +14,64 @@ pub struct SuiteConfig {
     pub image: Option<ImageMeta>,
     pub built_by: String,
     pub built_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl SuiteConfig {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != CURRENT_SCHEMA_VERSION {
+            errors.push(format!(
+                "Unsupported schema_version {}, expected {}",
+                self.schema_version, CURRENT_SCHEMA_VERSION
+            ));
+        }
+
+        match self.mode {
+            OperatingMode::Online => {
+                if self.server.is_none() {
+                    errors.push("Online mode requires a 'server' block".into());
+                }
+            }
+            OperatingMode::Offline => {
+                if self.image.is_none() {
+                    errors.push("Offline mode requires an 'image' block".into());
+                }
+            }
+            OperatingMode::Hybrid => {
+                if self.server.is_none() {
+                    errors.push("Hybrid mode requires a 'server' block".into());
+                }
+                if self.image.is_none() {
+                    errors.push("Hybrid mode requires an 'image' block (fallback)".into());
+                }
+            }
+        }
+
+        if let Some(server) = &self.server {
+            if server.discovery == DiscoveryMethod::Fixed && server.host.is_none() {
+                errors.push("Fixed discovery requires 'host' in server config".into());
+            }
+        }
+
+        if self.built_by.is_empty() {
+            errors.push("'built_by' must not be empty".into());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn needs_server(&self) -> bool {
+        matches!(self.mode, OperatingMode::Online | OperatingMode::Hybrid)
+    }
+
+    pub fn has_local_image(&self) -> bool {
+        matches!(self.mode, OperatingMode::Offline | OperatingMode::Hybrid) && self.image.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +134,8 @@ pub struct ImageMeta {
     pub size_bytes: Option<u64>,
     #[serde(default)]
     pub sha256: Option<String>,
+    #[serde(default)]
+    pub wim_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

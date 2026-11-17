@@ -12,6 +12,18 @@ fn main() -> Result<()> {
 
     let config = load_config();
 
+    if let Some(ref cfg) = config {
+        match cfg.validate() {
+            Ok(()) => tracing::info!("Config valid: mode={}, built_by={}", cfg.mode, cfg.built_by),
+            Err(errors) => {
+                for err in &errors {
+                    tracing::error!("Config validation error: {err}");
+                }
+                tracing::warn!("Continuing with invalid config — some features may not work");
+            }
+        }
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Windows Imaging Agent")
