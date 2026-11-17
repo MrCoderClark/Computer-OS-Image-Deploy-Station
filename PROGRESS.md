@@ -164,14 +164,14 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 10: Agent UI Polish
 **Branch:** `phase/10-agent-ui-polish`
-**Status:** Not started
+**Status:** Complete
 
-- [ ] Main screen: mode badge, connectivity dot, image panel, two action buttons
-- [ ] Confirm screen: disk details, typed confirmation gate
-- [ ] Progress screen: phase tracker, throughput, log tail
-- [ ] Error screen: full-screen with actionable message + retry
-- [ ] Reconnection overlay for network drops
-- [ ] Offline fallback display (Hybrid mode)
+- [x] Main screen: mode badge, connectivity dot, image panel, two action buttons
+- [x] Confirm screen: disk details, typed confirmation gate
+- [x] Progress screen: phase tracker, throughput, log tail
+- [x] Error screen: full-screen with actionable message + retry
+- [x] Reconnection overlay for network drops
+- [x] Offline fallback display (Hybrid mode)
 
 ---
 

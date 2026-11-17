@@ -2,10 +2,10 @@ use imaging_common::api::ImageSummary;
 use imaging_common::config::{OperatingMode, SuiteConfig};
 use imaging_common::types::DeployStatus;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ConnectionStatus {
     Connected,
     Connecting,
@@ -23,7 +23,6 @@ impl ConnectionStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Screen {
     Main,
     ConfirmDeploy,
@@ -33,10 +32,21 @@ pub enum Screen {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSource {
+    Config,
+    Server,
+    UsbFallback,
+}
+
 pub enum NetworkEvent {
     Connected,
     Unreachable(String),
     ImagesLoaded(Vec<ImageSummary>),
+    #[allow(dead_code)]
+    Reconnecting { attempt: u8 },
+    #[allow(dead_code)]
+    Reconnected,
     PipelineProgress {
         status: DeployStatus,
         progress_pct: u8,
@@ -54,10 +64,20 @@ pub struct AgentApp {
     pub error_message: Option<String>,
     pub confirm_text: String,
     pub server_images: Vec<ImageSummary>,
+
     pub deploy_status: Option<DeployStatus>,
     pub deploy_progress: u8,
     pub deploy_message: String,
+    pub deploy_started: Option<Instant>,
     pub log_lines: Vec<String>,
+    pub log_expanded: bool,
+
+    pub image_source: ImageSource,
+    pub using_offline_fallback: bool,
+
+    pub reconnecting: bool,
+    pub reconnect_attempt: u8,
+
     net_rx: mpsc::UnboundedReceiver<NetworkEvent>,
     net_tx: mpsc::UnboundedSender<NetworkEvent>,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -86,6 +106,11 @@ impl AgentApp {
 
         let (net_tx, net_rx) = mpsc::unbounded_channel();
 
+        let image_source = match &config {
+            Some(c) if c.image.is_some() => ImageSource::Config,
+            _ => ImageSource::Server,
+        };
+
         if connection == ConnectionStatus::Connecting {
             let server_config = config.as_ref().and_then(|c| c.server.clone());
             let name = machine_name.clone();
@@ -106,7 +131,13 @@ impl AgentApp {
             deploy_status: None,
             deploy_progress: 0,
             deploy_message: String::new(),
+            deploy_started: None,
             log_lines: Vec::new(),
+            log_expanded: false,
+            image_source,
+            using_offline_fallback: false,
+            reconnecting: false,
+            reconnect_attempt: 0,
             net_rx,
             net_tx,
             runtime: rt,
@@ -115,6 +146,26 @@ impl AgentApp {
 
     pub fn mode(&self) -> Option<OperatingMode> {
         self.config.as_ref().map(|c| c.mode)
+    }
+
+    pub fn elapsed_time(&self) -> Option<std::time::Duration> {
+        self.deploy_started.map(|s| s.elapsed())
+    }
+
+    pub fn formatted_elapsed(&self) -> String {
+        match self.elapsed_time() {
+            Some(d) => {
+                let secs = d.as_secs();
+                let mins = secs / 60;
+                let secs = secs % 60;
+                if mins > 0 {
+                    format!("{}m {}s elapsed", mins, secs)
+                } else {
+                    format!("{}s elapsed", secs)
+                }
+            }
+            None => String::new(),
+        }
     }
 
     pub fn resolve_deploy_provider(&self) -> Result<(std::path::PathBuf, u32), String> {
@@ -130,7 +181,9 @@ impl AgentApp {
         self.deploy_status = Some(DeployStatus::Pending);
         self.deploy_progress = 0;
         self.deploy_message = "Starting deploy...".into();
+        self.deploy_started = Some(Instant::now());
         self.log_lines.clear();
+        self.log_expanded = false;
         self.screen = Screen::Progress;
 
         let request = imaging_engine::pipeline::DeployRequest {
@@ -173,7 +226,9 @@ impl AgentApp {
         self.deploy_status = Some(DeployStatus::Pending);
         self.deploy_progress = 0;
         self.deploy_message = "Starting capture...".into();
+        self.deploy_started = Some(Instant::now());
         self.log_lines.clear();
+        self.log_expanded = false;
         self.screen = Screen::Progress;
 
         let capture_target = self.config.as_ref().and_then(|c| c.capture_target.clone());
@@ -231,14 +286,36 @@ impl AgentApp {
                 NetworkEvent::Connected => {
                     tracing::info!("Connected to server");
                     self.connection = ConnectionStatus::Connected;
+                    self.reconnecting = false;
+                    self.reconnect_attempt = 0;
                 }
                 NetworkEvent::Unreachable(reason) => {
                     tracing::warn!("Server unreachable: {reason}");
                     self.connection = ConnectionStatus::Unreachable;
+
+                    if self.mode() == Some(OperatingMode::Hybrid) && self.screen == Screen::Main {
+                        self.using_offline_fallback = true;
+                        self.image_source = ImageSource::UsbFallback;
+                    }
                 }
                 NetworkEvent::ImagesLoaded(images) => {
                     tracing::info!("Loaded {} images from server", images.len());
                     self.server_images = images;
+                    if self.image_source == ImageSource::Server {
+                        self.image_source = ImageSource::Server;
+                    }
+                }
+                NetworkEvent::Reconnecting { attempt } => {
+                    tracing::info!("Reconnection attempt {attempt}");
+                    self.reconnecting = true;
+                    self.reconnect_attempt = attempt;
+                    self.connection = ConnectionStatus::Connecting;
+                }
+                NetworkEvent::Reconnected => {
+                    tracing::info!("Reconnected to server");
+                    self.reconnecting = false;
+                    self.reconnect_attempt = 0;
+                    self.connection = ConnectionStatus::Connected;
                 }
                 NetworkEvent::PipelineProgress { status, progress_pct, message } => {
                     self.deploy_status = Some(status);
@@ -265,7 +342,8 @@ impl eframe::App for AgentApp {
         self.poll_network();
 
         let needs_repaint = self.connection == ConnectionStatus::Connecting
-            || self.screen == Screen::Progress;
+            || self.screen == Screen::Progress
+            || self.reconnecting;
         if needs_repaint {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
