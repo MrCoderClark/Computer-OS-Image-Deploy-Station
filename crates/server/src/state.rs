@@ -3,12 +3,16 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use imaging_common::api::{AuthResponse, SessionClaims};
+use imaging_common::driver::DriverPack;
+use imaging_common::sequence::TaskSequence;
 use imaging_common::types::ImageRecord;
 
 #[derive(Clone)]
 pub struct AppState {
     pub images: Arc<RwLock<Vec<ImageRecord>>>,
     pub sessions: Arc<RwLock<HashMap<String, SessionClaims>>>,
+    pub sequences: Arc<RwLock<Vec<TaskSequence>>>,
+    pub driver_packs: Arc<RwLock<Vec<DriverPack>>>,
 }
 
 impl AppState {
@@ -49,6 +53,8 @@ impl AppState {
         Self {
             images: Arc::new(RwLock::new(images)),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            sequences: Arc::new(RwLock::new(Vec::new())),
+            driver_packs: Arc::new(RwLock::new(Vec::new())),
         }
     }
 

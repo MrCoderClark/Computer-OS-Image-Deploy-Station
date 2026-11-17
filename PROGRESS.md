@@ -126,14 +126,20 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 8: Admin App — Task Sequences & Drivers
 **Branch:** `phase/08-task-sequences-drivers`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] Task sequence data model and editor UI
-- [ ] Step types: partition, apply, inject, script, domain join, reboot
-- [ ] Drag-to-reorder with validation constraints
-- [ ] Driver pack management (per-model, tagged by OS family)
-- [ ] Offline driver injection into applied image
-- [ ] Unattend.xml generation (computer name, domain, locale, key)
+- [x] Task sequence data model (common crate: TaskSequence, TaskStep, StepType, StepConfig)
+- [x] Step types: partition, apply_image, inject_drivers, run_script, domain_join, generate_unattend, reboot
+- [x] Validation constraints (apply after partition, inject/unattend after apply)
+- [x] Task sequence editor UI with reorder (up/down), enable/disable, add/remove steps
+- [x] Driver pack data model (common crate: DriverPack with hardware_model, os_family, path)
+- [x] Driver pack management UI (grid view, add form, delete)
+- [x] Offline driver injection via DISM wrapper (engine crate: drivers.rs)
+- [x] Unattend.xml generation via quick-xml (engine crate: unattend.rs, specialize + oobeSystem passes)
+- [x] Unattend preview command in admin backend
+- [x] Server API: CRUD endpoints for sequences and driver packs
+- [x] Admin Tauri backend: get/save/delete sequences, get/save/delete driver packs, new_sequence, new_step, preview_unattend
+- [x] Unit tests for Unattend.xml generation
 
 ---
 

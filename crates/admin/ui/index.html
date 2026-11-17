@@ -510,6 +510,62 @@
     .usb-pick.selected { border-color: var(--accent); background: var(--accent-bg); }
     .build-summary { font-size: 13px; line-height: 1.8; }
     .build-summary strong { font-weight: 600; }
+
+    /* Task Sequences */
+    .seq-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .seq-card {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; background: var(--surface); border: 1px solid var(--surface-border);
+      border-radius: 8px; cursor: pointer; transition: border-color 0.15s;
+    }
+    .seq-card:hover { border-color: var(--accent); }
+    .seq-card.active { border-color: var(--accent); background: var(--accent-bg); }
+    .seq-name { font-weight: 500; font-size: 14px; }
+    .seq-meta { font-size: 12px; color: var(--text-muted); }
+    .seq-editor { background: var(--surface); border: 1px solid var(--surface-border); border-radius: 8px; padding: 20px; }
+    .seq-editor-header { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+    .seq-editor-header input { flex: 1; }
+    .step-list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+    .step-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; background: var(--bg); border: 1px solid var(--surface-border);
+      border-radius: 6px; font-size: 13px;
+    }
+    .step-row.disabled { opacity: 0.5; }
+    .step-drag { cursor: grab; color: var(--text-muted); font-size: 16px; user-select: none; }
+    .step-type-badge {
+      font-size: 11px; font-weight: 600; padding: 2px 8px;
+      border-radius: 4px; background: var(--accent-bg); color: var(--accent);
+      white-space: nowrap;
+    }
+    .step-name { flex: 1; }
+    .step-actions { display: flex; gap: 4px; }
+    .step-actions button { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px; padding: 2px 6px; }
+    .step-actions button:hover { color: var(--accent); }
+    .add-step-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .add-step-btn {
+      font-size: 12px; padding: 4px 10px; border: 1px dashed var(--surface-border);
+      border-radius: 4px; background: none; color: var(--text-secondary); cursor: pointer;
+    }
+    .add-step-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Driver Packs */
+    .driver-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+    .driver-card {
+      background: var(--surface); border: 1px solid var(--surface-border);
+      border-radius: 8px; padding: 16px; position: relative;
+    }
+    .driver-card-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+    .driver-card-model { font-size: 12px; color: var(--text-secondary); }
+    .driver-card-meta { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+    .driver-card-delete {
+      position: absolute; top: 8px; right: 8px; background: none;
+      border: none; color: var(--text-muted); cursor: pointer; font-size: 14px;
+    }
+    .driver-card-delete:hover { color: var(--error); }
+    .driver-form { background: var(--surface); border: 1px solid var(--surface-border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+    .driver-form-row { display: flex; gap: 12px; margin-bottom: 10px; }
+    .driver-form-row .form-group { flex: 1; }
   </style>
 </head>
 <body>
@@ -632,16 +688,71 @@
       </div>
     </div>
 
-    <!-- Driver Packs (placeholder) -->
+    <!-- Driver Packs -->
     <div class="page" id="page-drivers">
-      <h1 class="page-title">Driver Packs</h1>
-      <div class="empty-state">Driver pack management will be available in a future phase.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h1 class="page-title" style="margin:0">Driver Packs</h1>
+        <button class="btn btn-primary" id="add-driver-btn">+ Add Driver Pack</button>
+      </div>
+      <div class="driver-form" id="driver-form" style="display:none">
+        <div style="font-weight:600;margin-bottom:12px">New Driver Pack</div>
+        <div class="driver-form-row">
+          <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="drv-name" placeholder="e.g. HP EliteBook 840 G9 Drivers"></div>
+          <div class="form-group"><label class="form-label">Hardware Model</label><input class="form-input" id="drv-model" placeholder="e.g. HP EliteBook 840 G9"></div>
+        </div>
+        <div class="driver-form-row">
+          <div class="form-group"><label class="form-label">OS Family</label>
+            <select class="form-input" id="drv-os"><option value="win11">Windows 11</option><option value="win10">Windows 10</option></select>
+          </div>
+          <div class="form-group"><label class="form-label">Driver Path (UNC or local)</label><input class="form-input" id="drv-path" placeholder="\\\\fileserver\\drivers\\HP840G9"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-primary" id="drv-save-btn">Save</button>
+          <button class="btn" id="drv-cancel-btn">Cancel</button>
+        </div>
+      </div>
+      <div class="driver-grid" id="driver-grid">
+        <div class="empty-state" id="driver-empty">No driver packs configured. Click "+ Add Driver Pack" to create one.</div>
+      </div>
     </div>
 
-    <!-- Task Sequences (placeholder) -->
+    <!-- Task Sequences -->
     <div class="page" id="page-sequences">
-      <h1 class="page-title">Task Sequences</h1>
-      <div class="empty-state">Task sequence editor will be available in a future phase.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h1 class="page-title" style="margin:0">Task Sequences</h1>
+        <button class="btn btn-primary" id="new-seq-btn">+ New Sequence</button>
+      </div>
+      <div style="display:flex;gap:16px">
+        <div style="width:280px;flex-shrink:0">
+          <div class="seq-list" id="seq-list">
+            <div class="empty-state" id="seq-empty" style="padding:16px;font-size:13px">No task sequences yet.</div>
+          </div>
+        </div>
+        <div style="flex:1" id="seq-editor-wrap">
+          <div class="seq-editor" id="seq-editor" style="display:none">
+            <div class="seq-editor-header">
+              <input class="form-input" id="seq-name-input" placeholder="Sequence name" style="font-size:16px;font-weight:600">
+              <button class="btn btn-primary" id="seq-save-btn">Save</button>
+              <button class="btn" id="seq-delete-btn" style="color:var(--error)">Delete</button>
+            </div>
+            <div class="form-group" style="margin-bottom:12px">
+              <input class="form-input" id="seq-desc-input" placeholder="Description (optional)">
+            </div>
+            <div style="font-weight:500;font-size:13px;margin-bottom:6px">Steps</div>
+            <div class="step-list" id="step-list"></div>
+            <div class="add-step-bar" id="add-step-bar">
+              <button class="add-step-btn" data-type="partition">+ Partition</button>
+              <button class="add-step-btn" data-type="apply_image">+ Apply Image</button>
+              <button class="add-step-btn" data-type="inject_drivers">+ Inject Drivers</button>
+              <button class="add-step-btn" data-type="run_script">+ Run Script</button>
+              <button class="add-step-btn" data-type="domain_join">+ Domain Join</button>
+              <button class="add-step-btn" data-type="generate_unattend">+ Unattend.xml</button>
+              <button class="add-step-btn" data-type="reboot">+ Reboot</button>
+            </div>
+          </div>
+          <div id="seq-no-selection" class="empty-state" style="padding:40px;text-align:center">Select a task sequence or create a new one</div>
+        </div>
+      </div>
     </div>
 
     <!-- Build Media Wizard -->
@@ -988,6 +1099,245 @@
     }
 
     init();
+
+    // === Task Sequences ===
+    let allSequences = [];
+    let activeSeqId = null;
+
+    document.getElementById('new-seq-btn').addEventListener('click', async () => {
+      try {
+        const seq = await invoke('new_sequence');
+        const saved = await invoke('save_sequence', { sequence: seq });
+        allSequences.push(saved);
+        activeSeqId = saved.id;
+        renderSeqList();
+        renderSeqEditor();
+      } catch (e) { alert('Failed to create sequence: ' + e); }
+    });
+
+    async function loadSequences() {
+      try {
+        allSequences = await invoke('get_sequences');
+        renderSeqList();
+      } catch (e) { console.error('load sequences', e); }
+    }
+
+    function renderSeqList() {
+      const container = document.getElementById('seq-list');
+      const empty = document.getElementById('seq-empty');
+      if (allSequences.length === 0) {
+        empty.style.display = '';
+        container.innerHTML = '';
+        container.appendChild(empty);
+        return;
+      }
+      empty.style.display = 'none';
+      container.innerHTML = allSequences.map(s => `
+        <div class="seq-card${s.id === activeSeqId ? ' active' : ''}" data-id="${s.id}">
+          <div>
+            <div class="seq-name">${s.name}</div>
+            <div class="seq-meta">${s.steps.length} step${s.steps.length !== 1 ? 's' : ''}</div>
+          </div>
+        </div>
+      `).join('');
+
+      container.querySelectorAll('.seq-card').forEach(el => {
+        el.addEventListener('click', () => {
+          activeSeqId = el.dataset.id;
+          renderSeqList();
+          renderSeqEditor();
+        });
+      });
+    }
+
+    function renderSeqEditor() {
+      const editor = document.getElementById('seq-editor');
+      const noSel = document.getElementById('seq-no-selection');
+      const seq = allSequences.find(s => s.id === activeSeqId);
+      if (!seq) {
+        editor.style.display = 'none';
+        noSel.style.display = '';
+        return;
+      }
+      editor.style.display = '';
+      noSel.style.display = 'none';
+      document.getElementById('seq-name-input').value = seq.name;
+      document.getElementById('seq-desc-input').value = seq.description || '';
+      renderStepList(seq);
+    }
+
+    const stepTypeLabels = {
+      partition: 'Partition', apply_image: 'Apply Image', inject_drivers: 'Inject Drivers',
+      run_script: 'Run Script', domain_join: 'Domain Join', generate_unattend: 'Unattend.xml', reboot: 'Reboot'
+    };
+
+    function renderStepList(seq) {
+      const container = document.getElementById('step-list');
+      container.innerHTML = seq.steps.map((step, i) => `
+        <div class="step-row${step.enabled ? '' : ' disabled'}" data-idx="${i}">
+          <span class="step-drag" title="Drag to reorder">≡</span>
+          <span class="step-type-badge">${stepTypeLabels[step.step_type] || step.step_type}</span>
+          <span class="step-name">${step.name}</span>
+          <span class="step-actions">
+            <button title="${step.enabled ? 'Disable' : 'Enable'}" data-action="toggle" data-idx="${i}">${step.enabled ? '✓' : '✗'}</button>
+            <button title="Move up" data-action="up" data-idx="${i}">▲</button>
+            <button title="Move down" data-action="down" data-idx="${i}">▼</button>
+            <button title="Remove" data-action="remove" data-idx="${i}">×</button>
+          </span>
+        </div>
+      `).join('');
+
+      container.querySelectorAll('.step-actions button').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.dataset.idx);
+          const action = btn.dataset.action;
+          const seq = allSequences.find(s => s.id === activeSeqId);
+          if (!seq) return;
+
+          if (action === 'toggle') {
+            seq.steps[idx].enabled = !seq.steps[idx].enabled;
+          } else if (action === 'up' && idx > 0) {
+            [seq.steps[idx - 1], seq.steps[idx]] = [seq.steps[idx], seq.steps[idx - 1]];
+            seq.steps.forEach((s, i) => s.order = i);
+          } else if (action === 'down' && idx < seq.steps.length - 1) {
+            [seq.steps[idx], seq.steps[idx + 1]] = [seq.steps[idx + 1], seq.steps[idx]];
+            seq.steps.forEach((s, i) => s.order = i);
+          } else if (action === 'remove') {
+            seq.steps.splice(idx, 1);
+            seq.steps.forEach((s, i) => s.order = i);
+          }
+          renderStepList(seq);
+        });
+      });
+    }
+
+    document.querySelectorAll('#add-step-bar .add-step-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const seq = allSequences.find(s => s.id === activeSeqId);
+        if (!seq) return;
+        try {
+          const step = await invoke('new_step', { stepType: btn.dataset.type });
+          step.order = seq.steps.length;
+          seq.steps.push(step);
+          renderStepList(seq);
+        } catch (e) { alert('Failed to add step: ' + e); }
+      });
+    });
+
+    document.getElementById('seq-save-btn').addEventListener('click', async () => {
+      const seq = allSequences.find(s => s.id === activeSeqId);
+      if (!seq) return;
+      seq.name = document.getElementById('seq-name-input').value;
+      seq.description = document.getElementById('seq-desc-input').value;
+      try {
+        const saved = await invoke('save_sequence', { sequence: seq });
+        const idx = allSequences.findIndex(s => s.id === saved.id);
+        if (idx >= 0) allSequences[idx] = saved;
+        renderSeqList();
+      } catch (e) { alert('Validation error: ' + e); }
+    });
+
+    document.getElementById('seq-delete-btn').addEventListener('click', async () => {
+      if (!activeSeqId) return;
+      if (!confirm('Delete this task sequence?')) return;
+      try {
+        await invoke('delete_sequence', { id: activeSeqId });
+        allSequences = allSequences.filter(s => s.id !== activeSeqId);
+        activeSeqId = null;
+        renderSeqList();
+        renderSeqEditor();
+      } catch (e) { alert('Failed to delete: ' + e); }
+    });
+
+    // === Driver Packs ===
+    let allDriverPacks = [];
+
+    document.getElementById('add-driver-btn').addEventListener('click', () => {
+      document.getElementById('driver-form').style.display = '';
+      document.getElementById('drv-name').value = '';
+      document.getElementById('drv-model').value = '';
+      document.getElementById('drv-path').value = '';
+    });
+
+    document.getElementById('drv-cancel-btn').addEventListener('click', () => {
+      document.getElementById('driver-form').style.display = 'none';
+    });
+
+    document.getElementById('drv-save-btn').addEventListener('click', async () => {
+      const name = document.getElementById('drv-name').value.trim();
+      const model = document.getElementById('drv-model').value.trim();
+      const path = document.getElementById('drv-path').value.trim();
+      const os = document.getElementById('drv-os').value;
+      if (!name) { alert('Name is required'); return; }
+
+      const pack = {
+        id: crypto.randomUUID(),
+        name, hardware_model: model, os_family: os,
+        path, driver_count: 0, size_bytes: 0,
+        created_at: new Date().toISOString(),
+      };
+
+      try {
+        const saved = await invoke('save_driver_pack', { pack });
+        allDriverPacks.push(saved);
+        document.getElementById('driver-form').style.display = 'none';
+        renderDriverGrid();
+      } catch (e) { alert('Failed to save driver pack: ' + e); }
+    });
+
+    async function loadDriverPacks() {
+      try {
+        allDriverPacks = await invoke('get_driver_packs');
+        renderDriverGrid();
+      } catch (e) { console.error('load drivers', e); }
+    }
+
+    function renderDriverGrid() {
+      const grid = document.getElementById('driver-grid');
+      const empty = document.getElementById('driver-empty');
+      if (allDriverPacks.length === 0) {
+        grid.innerHTML = '';
+        empty.style.display = '';
+        grid.appendChild(empty);
+        return;
+      }
+      empty.style.display = 'none';
+      grid.innerHTML = allDriverPacks.map(p => `
+        <div class="driver-card" data-id="${p.id}">
+          <button class="driver-card-delete" data-id="${p.id}" title="Delete">×</button>
+          <div class="driver-card-name">${p.name}</div>
+          <div class="driver-card-model">${p.hardware_model || '—'}</div>
+          <div class="driver-card-meta">
+            ${osBadge(p.os_family)}
+            ${p.driver_count ? p.driver_count + ' drivers' : ''}
+            ${p.path ? ' &middot; ' + p.path : ''}
+          </div>
+        </div>
+      `).join('');
+
+      grid.querySelectorAll('.driver-card-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm('Delete this driver pack?')) return;
+          try {
+            await invoke('delete_driver_pack', { id: btn.dataset.id });
+            allDriverPacks = allDriverPacks.filter(p => p.id !== btn.dataset.id);
+            renderDriverGrid();
+          } catch (e) { alert('Failed to delete: ' + e); }
+        });
+      });
+    }
+
+    // Load data when navigating to these pages
+    const origNavHandler = document.querySelectorAll('.nav-item');
+    origNavHandler.forEach(item => {
+      item.addEventListener('click', () => {
+        const page = item.dataset.page;
+        if (page === 'sequences') loadSequences();
+        if (page === 'drivers') loadDriverPacks();
+      });
+    });
 
     // === Build Media Wizard ===
     let wizStep = 1;

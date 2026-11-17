@@ -4,3 +4,5 @@ pub mod bcd;
 pub mod pipeline;
 pub mod provider;
 pub mod capture;
+pub mod drivers;
+pub mod unattend;

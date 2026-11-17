@@ -27,6 +27,9 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# XML
+quick-xml = { version = "0.37", features = ["serialize"] }
+
 # Network / RPC
 axum = "0.8"
 tower = "0.5"

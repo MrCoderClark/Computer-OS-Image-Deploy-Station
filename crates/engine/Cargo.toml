@@ -13,4 +13,5 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
+quick-xml = { workspace = true }
 libloading = "0.8"
