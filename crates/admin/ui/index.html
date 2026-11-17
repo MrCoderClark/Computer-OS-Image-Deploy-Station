@@ -5,133 +5,779 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DeployStation</title>
   <style>
+    :root {
+      --bg: #f3f3f3;
+      --surface: #ffffff;
+      --surface-border: #e5e5e5;
+      --text: #1a1a1a;
+      --text-secondary: #5c5c5c;
+      --text-muted: #8a8a8a;
+      --accent: #005fb8;
+      --accent-bg: #e8f4fd;
+      --success: #0f7b0f;
+      --warning: #9d5d00;
+      --error: #c42b1c;
+      --sidebar-bg: #ffffff;
+      --badge-win11: #005fb8;
+      --badge-win10: #9d5d00;
+      --hover: rgba(0,0,0,0.04);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1c;
+        --surface: #2d2d2d;
+        --surface-border: #404040;
+        --text: #f5f5f5;
+        --text-secondary: #b0b0b0;
+        --text-muted: #8a8a8a;
+        --accent: #60cdff;
+        --accent-bg: #003d6e;
+        --success: #6ccb5f;
+        --warning: #fce100;
+        --error: #ff6961;
+        --sidebar-bg: #2d2d2d;
+        --badge-win11: #60cdff;
+        --badge-win10: #fce100;
+        --hover: rgba(255,255,255,0.06);
+      }
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
-      background: #f3f3f3;
-      color: #1a1a1a;
+      background: var(--bg);
+      color: var(--text);
       display: flex;
       height: 100vh;
+      overflow: hidden;
     }
-    @media (prefers-color-scheme: dark) {
-      body { background: #1c1c1c; color: #f5f5f5; }
-      .sidebar { background: #2d2d2d; border-color: #404040; }
-      .main { background: #1c1c1c; }
-      .stat-card { background: #2d2d2d; border-color: #404040; }
-    }
+
+    /* Sidebar */
     .sidebar {
       width: 220px;
-      background: #fff;
-      border-right: 1px solid #e5e5e5;
-      padding: 16px 0;
+      min-width: 220px;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--surface-border);
       display: flex;
       flex-direction: column;
+      user-select: none;
     }
-    .sidebar h2 {
+    .sidebar-header {
+      padding: 16px 16px 12px;
       font-size: 14px;
       font-weight: 700;
-      padding: 0 16px 16px;
-    }
-    .nav-item {
-      padding: 8px 16px;
-      font-size: 13px;
-      cursor: pointer;
-      font-weight: 500;
-      color: #5c5c5c;
-    }
-    .nav-item.active {
-      background: #e8f4fd;
-      color: #005fb8;
-      font-weight: 600;
+      letter-spacing: -0.01em;
     }
     .nav-section {
       font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      color: #8a8a8a;
+      color: var(--text-muted);
       padding: 16px 16px 4px;
     }
+    .nav-item {
+      padding: 7px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: 4px;
+      margin: 1px 8px;
+      transition: background 0.1s;
+    }
+    .nav-item:hover { background: var(--hover); }
+    .nav-item.active {
+      background: var(--accent-bg);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 12px 16px;
+      font-size: 11px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--surface-border);
+    }
+    .server-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+    .status-dot.connected { background: var(--success); }
+
+    /* Main content */
     .main {
       flex: 1;
-      padding: 32px;
       overflow-y: auto;
+      padding: 32px;
     }
-    .main h1 {
+    .page { display: none; }
+    .page.active { display: block; }
+
+    .page-title {
       font-size: 24px;
       font-weight: 700;
       margin-bottom: 24px;
+      letter-spacing: -0.02em;
     }
+
+    /* Stats grid */
     .stats {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: 12px;
+      margin-bottom: 24px;
     }
     .stat-card {
-      background: #fff;
-      border: 1px solid #e5e5e5;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
       border-radius: 6px;
       padding: 16px;
     }
-    .stat-card .label { font-size: 12px; color: #8a8a8a; }
-    .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
-    .version {
-      margin-top: auto;
-      padding: 12px 16px;
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-sub {
       font-size: 11px;
-      color: #8a8a8a;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* Alert banner */
+    .alert {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-left: 3px solid var(--warning);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 13px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .alert-icon { font-size: 16px; }
+
+    /* Table */
+    .table-container {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .table-header {
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--surface-border);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      text-align: left;
+      padding: 8px 16px;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--surface-border);
+    }
+    td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--surface-border);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover { background: var(--hover); }
+
+    /* Image catalogue */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .search-input {
+      flex: 1;
+      min-width: 200px;
+      padding: 7px 12px;
+      border: 1px solid var(--surface-border);
+      border-radius: 4px;
+      font-size: 13px;
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--accent); }
+    .filter-select {
+      padding: 7px 12px;
+      border: 1px solid var(--surface-border);
+      border-radius: 4px;
+      font-size: 13px;
+      background: var(--surface);
+      color: var(--text);
+    }
+    .view-toggle {
+      display: flex;
+      border: 1px solid var(--surface-border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .view-btn {
+      padding: 6px 10px;
+      background: var(--surface);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    .view-btn.active {
+      background: var(--accent-bg);
+      color: var(--accent);
+    }
+
+    /* Image grid */
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 12px;
+    }
+    .image-card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      padding: 16px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .image-card:hover { border-color: var(--accent); }
+    .image-card-name {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .image-card-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge-win11 { background: var(--badge-win11); color: #fff; }
+    .badge-win10 { background: var(--badge-win10); color: #1a1a1a; }
+    .hash-verified { color: var(--success); font-size: 11px; }
+    .hash-unverified { color: var(--text-muted); font-size: 11px; }
+
+    /* Image list view */
+    .image-list { display: none; }
+    .image-list.active { display: block; }
+    .image-grid.active { display: grid; }
+    .image-grid:not(.active) { display: none; }
+
+    /* Detail panel */
+    .detail-panel {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      padding: 24px;
+      margin-top: 16px;
+    }
+    .detail-panel.active { display: block; }
+    .detail-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 8px 16px;
+      font-size: 13px;
+    }
+    .detail-label {
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+    .detail-close {
+      float: right;
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: var(--text-muted);
+      padding: 4px 8px;
+    }
+
+    /* Settings */
+    .settings-section {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .settings-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .form-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .form-label {
+      width: 140px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+    .form-input {
+      flex: 1;
+      padding: 7px 12px;
+      border: 1px solid var(--surface-border);
+      border-radius: 4px;
+      font-size: 13px;
+      background: var(--surface);
+      color: var(--text);
+      max-width: 360px;
+    }
+    .form-input:focus { outline: none; border-color: var(--accent); }
+
+    .btn {
+      padding: 7px 16px;
+      border: 1px solid var(--surface-border);
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--surface);
+      color: var(--text);
+      transition: background 0.1s;
+    }
+    .btn:hover { background: var(--hover); }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover { opacity: 0.9; }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 16px;
+      color: var(--text-muted);
+      font-size: 14px;
     }
   </style>
 </head>
 <body>
   <div class="sidebar">
-    <h2>DeployStation</h2>
-    <div class="nav-item active">Dashboard</div>
+    <div class="sidebar-header">DeployStation</div>
+    <div class="nav-item active" data-page="dashboard">Dashboard</div>
     <div class="nav-section">Library</div>
-    <div class="nav-item">Image Catalogue</div>
-    <div class="nav-item">Driver Packs</div>
-    <div class="nav-item">Task Sequences</div>
+    <div class="nav-item" data-page="catalogue">Image Catalogue</div>
+    <div class="nav-item" data-page="drivers">Driver Packs</div>
+    <div class="nav-item" data-page="sequences">Task Sequences</div>
     <div class="nav-section">Operations</div>
-    <div class="nav-item">Build Media</div>
-    <div class="nav-item">Deployments</div>
+    <div class="nav-item" data-page="media">Build Media</div>
+    <div class="nav-item" data-page="deployments">Deployments</div>
     <div class="nav-section">System</div>
-    <div class="nav-item">Audit Log</div>
-    <div class="nav-item">Settings</div>
-    <div class="version" id="version">Loading...</div>
-  </div>
-  <div class="main">
-    <h1>Dashboard</h1>
-    <div class="stats">
-      <div class="stat-card">
-        <div class="label">Active Deployments</div>
-        <div class="value">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Images in Catalogue</div>
-        <div class="value">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">USB Media Built</div>
-        <div class="value">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Mode</div>
-        <div class="value" id="mode" style="font-size:16px">—</div>
+    <div class="nav-item" data-page="audit">Audit Log</div>
+    <div class="nav-item" data-page="settings">Settings</div>
+    <div class="sidebar-footer">
+      <div id="version">v0.1.0</div>
+      <div class="server-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="server-label">Checking...</span>
       </div>
     </div>
   </div>
+
+  <div class="main">
+    <!-- Dashboard -->
+    <div class="page active" id="page-dashboard">
+      <h1 class="page-title">Dashboard</h1>
+      <div class="stats">
+        <div class="stat-card">
+          <div class="stat-label">Active Deployments</div>
+          <div class="stat-value" id="stat-deploys">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Images in Catalogue</div>
+          <div class="stat-value" id="stat-images">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">USB Media Built</div>
+          <div class="stat-value" id="stat-media">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Captures Pending</div>
+          <div class="stat-value" id="stat-captures">—</div>
+        </div>
+      </div>
+      <div class="alert" id="alert-rotation" style="display:none">
+        <span class="alert-icon">&#9888;</span>
+        <span>Credential rotation reminder: review service account passwords and rebuild active media if expired.</span>
+      </div>
+      <div class="table-container">
+        <div class="table-header">Recent Activity</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Event</th>
+              <th>Target</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="activity-body">
+            <tr><td colspan="4" class="empty-state">No recent activity</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Image Catalogue -->
+    <div class="page" id="page-catalogue">
+      <h1 class="page-title">Image Catalogue</h1>
+      <div class="toolbar">
+        <input type="text" class="search-input" id="image-search" placeholder="Search images...">
+        <select class="filter-select" id="os-filter">
+          <option value="all">OS: All</option>
+          <option value="Windows 11">Windows 11</option>
+          <option value="Windows 10">Windows 10</option>
+        </select>
+        <div class="view-toggle">
+          <button class="view-btn active" id="view-grid" title="Grid view">&#9638;</button>
+          <button class="view-btn" id="view-list" title="List view">&#9776;</button>
+        </div>
+      </div>
+      <div class="image-grid active" id="image-grid-container"></div>
+      <div class="image-list" id="image-list-container">
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>OS</th>
+                <th>Source</th>
+                <th>Size</th>
+                <th>Build Date</th>
+                <th>Hash</th>
+              </tr>
+            </thead>
+            <tbody id="image-list-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="detail-panel" id="detail-panel">
+        <button class="detail-close" id="detail-close">&times;</button>
+        <div class="detail-title" id="detail-name"></div>
+        <div class="detail-grid">
+          <div class="detail-label">OS Family</div>
+          <div id="detail-os"></div>
+          <div class="detail-label">Source Hardware</div>
+          <div id="detail-source"></div>
+          <div class="detail-label">Size</div>
+          <div id="detail-size"></div>
+          <div class="detail-label">Build Date</div>
+          <div id="detail-date"></div>
+          <div class="detail-label">SHA-256</div>
+          <div id="detail-hash" style="font-family:monospace;font-size:12px;word-break:break-all"></div>
+          <div class="detail-label">Image ID</div>
+          <div id="detail-id" style="font-family:monospace;font-size:12px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Driver Packs (placeholder) -->
+    <div class="page" id="page-drivers">
+      <h1 class="page-title">Driver Packs</h1>
+      <div class="empty-state">Driver pack management will be available in a future phase.</div>
+    </div>
+
+    <!-- Task Sequences (placeholder) -->
+    <div class="page" id="page-sequences">
+      <h1 class="page-title">Task Sequences</h1>
+      <div class="empty-state">Task sequence editor will be available in a future phase.</div>
+    </div>
+
+    <!-- Build Media (placeholder) -->
+    <div class="page" id="page-media">
+      <h1 class="page-title">Build Bootable USB</h1>
+      <div class="empty-state">USB media builder wizard will be available in Phase 7.</div>
+    </div>
+
+    <!-- Deployments (placeholder) -->
+    <div class="page" id="page-deployments">
+      <h1 class="page-title">Deployments</h1>
+      <div class="empty-state">Deployment monitoring will be available in Phase 9.</div>
+    </div>
+
+    <!-- Audit Log (placeholder) -->
+    <div class="page" id="page-audit">
+      <h1 class="page-title">Audit Log</h1>
+      <div class="empty-state">Audit log viewer will be available in Phase 9.</div>
+    </div>
+
+    <!-- Settings -->
+    <div class="page" id="page-settings">
+      <h1 class="page-title">Settings</h1>
+      <div class="settings-section">
+        <div class="settings-title">Server Connection</div>
+        <div class="form-row">
+          <label class="form-label">Host</label>
+          <input class="form-input" id="settings-host" value="127.0.0.1">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Port</label>
+          <input class="form-input" id="settings-port" type="number" value="7443">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Discovery</label>
+          <select class="filter-select" id="settings-discovery">
+            <option value="fixed">Fixed host</option>
+            <option value="dns">DNS SRV</option>
+            <option value="dhcp">DHCP option</option>
+            <option value="broadcast">UDP broadcast</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-title">Capture Credentials</div>
+        <div class="form-row">
+          <label class="form-label">UNC Path</label>
+          <input class="form-input" id="settings-unc" placeholder="\\\\fileserver\\captures">
+        </div>
+        <div class="form-row">
+          <label class="form-label">Service Account</label>
+          <input class="form-input" id="settings-account" placeholder="DOMAIN\\svc-imaging">
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-title">Preferences</div>
+        <div class="form-row">
+          <label class="form-label">Default Mode</label>
+          <select class="filter-select" id="settings-mode">
+            <option value="hybrid">Hybrid (recommended)</option>
+            <option value="online">Online</option>
+            <option value="offline">Offline</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const { invoke } = window.__TAURI__.core;
+    let allImages = [];
+    let selectedImage = null;
+
+    // Navigation
+    document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        item.classList.add('active');
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById('page-' + item.dataset.page).classList.add('active');
+      });
+    });
+
+    // View toggle
+    document.getElementById('view-grid').addEventListener('click', () => {
+      document.getElementById('view-grid').classList.add('active');
+      document.getElementById('view-list').classList.remove('active');
+      document.getElementById('image-grid-container').classList.add('active');
+      document.getElementById('image-list-container').classList.remove('active');
+    });
+    document.getElementById('view-list').addEventListener('click', () => {
+      document.getElementById('view-list').classList.add('active');
+      document.getElementById('view-grid').classList.remove('active');
+      document.getElementById('image-list-container').classList.add('active');
+      document.getElementById('image-grid-container').classList.remove('active');
+    });
+
+    // Search & filter
+    document.getElementById('image-search').addEventListener('input', renderImages);
+    document.getElementById('os-filter').addEventListener('change', renderImages);
+
+    // Detail panel close
+    document.getElementById('detail-close').addEventListener('click', () => {
+      document.getElementById('detail-panel').classList.remove('active');
+      selectedImage = null;
+    });
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const gb = bytes / 1073741824;
+      if (gb >= 1) return gb.toFixed(1) + ' GB';
+      const mb = bytes / 1048576;
+      return mb.toFixed(0) + ' MB';
+    }
+
+    function osBadge(os) {
+      const cls = os === 'Windows 11' ? 'badge-win11' : 'badge-win10';
+      const label = os === 'Windows 11' ? 'Win11' : 'Win10';
+      return `<span class="badge ${cls}">${label}</span>`;
+    }
+
+    function hashStatus(sha) {
+      if (sha && sha.length >= 16 && !sha.includes('...')) {
+        return '<span class="hash-verified">SHA-256 verified</span>';
+      }
+      return '<span class="hash-unverified">Not verified</span>';
+    }
+
+    function getFilteredImages() {
+      const query = document.getElementById('image-search').value.toLowerCase();
+      const osFilter = document.getElementById('os-filter').value;
+      return allImages.filter(img => {
+        const matchQuery = !query ||
+          img.name.toLowerCase().includes(query) ||
+          (img.captured_from || '').toLowerCase().includes(query);
+        const matchOs = osFilter === 'all' || img.os_family === osFilter;
+        return matchQuery && matchOs;
+      });
+    }
+
+    function renderImages() {
+      const images = getFilteredImages();
+      const gridEl = document.getElementById('image-grid-container');
+      const listBody = document.getElementById('image-list-body');
+
+      if (images.length === 0) {
+        gridEl.innerHTML = '<div class="empty-state">No images found</div>';
+        listBody.innerHTML = '<tr><td colspan="6" class="empty-state">No images found</td></tr>';
+        return;
+      }
+
+      gridEl.innerHTML = images.map(img => `
+        <div class="image-card" data-id="${img.id}">
+          <div style="display:flex;justify-content:space-between;align-items:start">
+            <div class="image-card-name">${img.name}</div>
+            ${osBadge(img.os_family)}
+          </div>
+          <div class="image-card-row">
+            <span>${img.captured_from || '—'}</span>
+            <span>${formatBytes(img.size_bytes)}</span>
+          </div>
+          <div class="image-card-row">
+            <span>${img.build_date || '—'}</span>
+            ${hashStatus(img.sha256)}
+          </div>
+        </div>
+      `).join('');
+
+      listBody.innerHTML = images.map(img => `
+        <tr class="image-row" data-id="${img.id}">
+          <td><strong>${img.name}</strong></td>
+          <td>${osBadge(img.os_family)}</td>
+          <td>${img.captured_from || '—'}</td>
+          <td style="font-variant-numeric:tabular-nums">${formatBytes(img.size_bytes)}</td>
+          <td>${img.build_date || '—'}</td>
+          <td>${hashStatus(img.sha256)}</td>
+        </tr>
+      `).join('');
+
+      gridEl.querySelectorAll('.image-card').forEach(card => {
+        card.addEventListener('click', () => showDetail(card.dataset.id));
+      });
+      listBody.querySelectorAll('.image-row').forEach(row => {
+        row.addEventListener('click', () => showDetail(row.dataset.id));
+      });
+    }
+
+    function showDetail(id) {
+      const img = allImages.find(i => i.id === id);
+      if (!img) return;
+      selectedImage = img;
+      document.getElementById('detail-name').textContent = img.name;
+      document.getElementById('detail-os').innerHTML = osBadge(img.os_family);
+      document.getElementById('detail-source').textContent = img.captured_from || '—';
+      document.getElementById('detail-size').textContent = formatBytes(img.size_bytes);
+      document.getElementById('detail-date').textContent = img.build_date || '—';
+      document.getElementById('detail-hash').textContent = img.sha256;
+      document.getElementById('detail-id').textContent = img.id;
+      document.getElementById('detail-panel').classList.add('active');
+    }
+
+    async function loadDashboard() {
+      try {
+        const stats = await invoke('get_dashboard_stats');
+        document.getElementById('stat-deploys').textContent = stats.active_deploys;
+        document.getElementById('stat-images').textContent = stats.images_count;
+        document.getElementById('stat-media').textContent = stats.media_built;
+        document.getElementById('stat-captures').textContent = stats.captures_pending;
+
+        const dot = document.getElementById('status-dot');
+        const label = document.getElementById('server-label');
+        if (stats.server_connected) {
+          dot.classList.add('connected');
+          label.textContent = 'Server connected';
+        } else {
+          dot.classList.remove('connected');
+          label.textContent = 'Server unreachable';
+        }
+      } catch (e) {
+        console.error('Dashboard load failed:', e);
+      }
+    }
+
+    async function loadImages() {
+      try {
+        allImages = await invoke('get_images');
+        renderImages();
+      } catch (e) {
+        console.error('Image load failed:', e);
+        allImages = [];
+        renderImages();
+      }
+    }
 
     async function init() {
       try {
         const version = await invoke('get_version');
-        document.getElementById('version').textContent = `v${version}`;
-        const mode = await invoke('get_mode');
-        document.getElementById('mode').textContent = mode;
-      } catch (e) {
-        console.error('Tauri invoke failed:', e);
-      }
+        document.getElementById('version').textContent = 'v' + version;
+      } catch (e) {}
+
+      await Promise.all([loadDashboard(), loadImages()]);
     }
 
     init();

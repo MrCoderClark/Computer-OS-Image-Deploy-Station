@@ -79,7 +79,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 5: Capture Path
 **Branch:** `phase/05-capture-path`
-**Status:** In progress
+**Status:** Complete
 
 - [x] UNC share probe before capture (net use with service account, reachability check)
 - [x] WIM capture via WIMGAPI (from Phase 3 engine)
@@ -95,13 +95,17 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 6: Admin App — Core UI
 **Branch:** `phase/06-admin-core-ui`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] App shell: sidebar navigation, titlebar, routing
-- [ ] Dashboard: stats, recent activity, alerts
-- [ ] Image catalogue: grid/list view, search, filter
-- [ ] Image detail panel
-- [ ] Settings page (server config, credentials, preferences)
+- [x] App shell: sidebar navigation with section headers, page routing
+- [x] Dashboard: live stats from server (deploys, images, media, captures), server status indicator
+- [x] Image catalogue: grid + list views with toggle, search, OS family filter
+- [x] Image detail panel: click card to expand full metadata
+- [x] Settings page: server connection, capture credentials, default mode
+- [x] Tauri backend: get_dashboard_stats, get_images commands with server integration
+- [x] Placeholder pages for Driver Packs, Task Sequences, Build Media, Deployments, Audit Log
+- [x] Dark mode support via prefers-color-scheme
+- [x] WinUI 3 design language (Segoe UI Variable, color tokens, card surfaces)
 
 ---
 
