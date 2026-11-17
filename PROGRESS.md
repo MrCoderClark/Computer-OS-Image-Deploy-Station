@@ -64,7 +64,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 4: Configuration Contract
 **Branch:** `phase/04-config-contract`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Config schema with validation (schema_version, mode constraints, discovery rules)
 - [x] Admin app Tauri commands: `build_config` and `validate_config`
@@ -79,14 +79,17 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 5: Capture Path
 **Branch:** `phase/05-capture-path`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] UNC share probe at agent startup
-- [ ] VSS snapshot of live volume
-- [ ] WIM capture via WIMGAPI
-- [ ] Upload to UNC share (never to stick)
-- [ ] Local manifest written to stick logs/
-- [ ] Capture reconciliation in admin app
+- [x] UNC share probe before capture (net use with service account, reachability check)
+- [x] WIM capture via WIMGAPI (from Phase 3 engine)
+- [x] SHA-256 hashing of captured WIM via certutil
+- [x] Local manifest written to logs/ (JSON with id, machine, hash, size, UNC path)
+- [x] Enhanced capture pipeline: probe → capture → hash → manifest
+- [x] Server reconciliation endpoint (POST /api/captures/reconcile)
+- [x] Agent client reconcile_capture method
+- [ ] VSS snapshot of live volume *(deferred — requires additional Win32 bindings)*
+- [ ] Capture reconciliation UI in admin app *(deferred to Phase 6)*
 
 ---
 

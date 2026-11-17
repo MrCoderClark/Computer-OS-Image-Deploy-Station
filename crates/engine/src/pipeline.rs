@@ -23,6 +23,11 @@ pub struct CaptureRequest {
     pub job_id: Uuid,
     pub source_volume: String,
     pub output_wim: PathBuf,
+    pub machine_name: String,
+    pub image_name: String,
+    pub os_family: imaging_common::config::OsFamily,
+    pub capture_target: Option<imaging_common::config::CaptureTarget>,
+    pub log_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -92,18 +97,61 @@ pub async fn run_capture(
 ) -> Result<()> {
     let job_id = request.job_id;
 
-    send_progress(&progress_tx, job_id, DeployStatus::Applying, 0, "Preparing capture").await;
+    // Step 1: Probe capture share
+    if let Some(ref target) = request.capture_target {
+        send_progress(&progress_tx, job_id, DeployStatus::Pending, 0, "Probing capture share").await;
+        let target_clone = target.clone();
+        tokio::task::spawn_blocking(move || crate::capture::probe_share(&target_clone))
+            .await
+            .context("share probe task panicked")??;
+        send_progress(&progress_tx, job_id, DeployStatus::Pending, 5, "Capture share reachable").await;
+    }
+
+    // Step 2: Capture WIM
+    send_progress(&progress_tx, job_id, DeployStatus::Applying, 10, "Capturing WIM image").await;
 
     let source = request.source_volume.clone();
     let output = request.output_wim.clone();
-    send_progress(&progress_tx, job_id, DeployStatus::Applying, 10, "Capturing WIM image").await;
-
     tokio::task::spawn_blocking(move || {
         let session = WimSession::load()?;
         session.capture_image(&output, Path::new(&source))
     })
     .await
     .context("WIM capture task panicked")??;
+
+    send_progress(&progress_tx, job_id, DeployStatus::Configuring, 70, "Computing file hash").await;
+
+    // Step 3: Hash the captured WIM
+    let wim_for_hash = request.output_wim.clone();
+    let hash = tokio::task::spawn_blocking(move || {
+        crate::capture::compute_file_hash(&wim_for_hash)
+    })
+    .await
+    .context("hash task panicked")??;
+
+    // Step 4: Get file size
+    let file_size = std::fs::metadata(&request.output_wim)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    send_progress(&progress_tx, job_id, DeployStatus::Configuring, 85, "Writing capture manifest").await;
+
+    // Step 5: Write local manifest
+    let manifest = imaging_common::types::CaptureManifest {
+        id: job_id,
+        image_name: request.image_name.clone(),
+        os_family: request.os_family,
+        source_machine: request.machine_name.clone(),
+        captured_at: chrono::Utc::now(),
+        size_bytes: file_size,
+        sha256: hash,
+        unc_path: request.output_wim.to_string_lossy().to_string(),
+    };
+
+    let log_dir = request.log_dir.clone();
+    tokio::task::spawn_blocking(move || crate::capture::write_manifest(&manifest, &log_dir))
+        .await
+        .context("manifest write task panicked")??;
 
     send_progress(&progress_tx, job_id, DeployStatus::Complete, 100, "Capture complete").await;
 

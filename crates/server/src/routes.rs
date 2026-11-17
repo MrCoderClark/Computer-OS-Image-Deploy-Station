@@ -15,6 +15,7 @@ pub fn api_routes() -> Router<AppState> {
         .route("/api/images", get(list_images))
         .route("/api/images/{id}/download", get(download_image))
         .route("/api/deploy/status", post(report_deploy_status))
+        .route("/api/captures/reconcile", post(reconcile_capture))
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -142,4 +143,48 @@ async fn report_deploy_status(
     );
 
     Ok(StatusCode::OK)
+}
+
+async fn reconcile_capture(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(manifest): Json<imaging_common::types::CaptureManifest>,
+) -> Result<StatusCode, StatusCode> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let token = match token {
+        Some(t) => t,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    if state.validate_session(token).await.is_none() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    tracing::info!(
+        "Capture reconciliation: id={}, image={}, machine={}, size={} bytes",
+        manifest.id,
+        manifest.image_name,
+        manifest.source_machine,
+        manifest.size_bytes,
+    );
+
+    let record = imaging_common::types::ImageRecord {
+        id: manifest.id,
+        name: manifest.image_name,
+        os_family: manifest.os_family,
+        captured_from: Some(manifest.source_machine),
+        build_date: manifest.captured_at.date_naive(),
+        size_bytes: manifest.size_bytes,
+        sha256: manifest.sha256,
+        created_at: manifest.captured_at,
+    };
+
+    state.images.write().await.push(record);
+
+    tracing::info!("Capture registered in image catalogue");
+    Ok(StatusCode::CREATED)
 }
