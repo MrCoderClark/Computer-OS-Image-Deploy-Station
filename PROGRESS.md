@@ -10,13 +10,13 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 0: Project Foundation
 **Branch:** `phase/00-project-foundation`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] Initialize Cargo workspace (multi-crate)
-- [ ] Create crate structure: `admin`, `agent`, `server`, `common`
-- [ ] Set up Tauri project for admin app
-- [ ] Configure shared dependencies in workspace Cargo.toml
-- [ ] Add CLAUDE.md, PROGRESS.md, .gitignore
+- [x] Initialize Cargo workspace (multi-crate)
+- [x] Create crate structure: `admin`, `agent`, `server`, `common`
+- [x] Set up Tauri project for admin app
+- [x] Configure shared dependencies in workspace Cargo.toml
+- [x] Add CLAUDE.md, PROGRESS.md, .gitignore
 - [ ] Initial commit on main
 
 ---

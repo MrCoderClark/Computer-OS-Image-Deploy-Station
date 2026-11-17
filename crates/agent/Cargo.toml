@@ -1,0 +1,18 @@
+[package]
+name = "imaging-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "imaging-agent"
+path = "src/main.rs"
+
+[dependencies]
+imaging-common = { path = "../common" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+eframe = "0.31"
