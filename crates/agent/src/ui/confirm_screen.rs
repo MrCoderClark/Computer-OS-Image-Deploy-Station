@@ -99,8 +99,15 @@ pub fn show(ctx: &egui::Context, app: &mut AgentApp, is_deploy: bool) {
                                 if resp.clicked() {
                                     app.confirm_text.clear();
                                     if is_deploy {
-                                        let wim_path = std::path::PathBuf::from(r"X:\imaging\install.wim");
-                                        app.start_deploy(0, wim_path, 1);
+                                        match app.resolve_deploy_provider() {
+                                            Ok((wim_path, index)) => {
+                                                app.start_deploy(0, wim_path, index);
+                                            }
+                                            Err(e) => {
+                                                app.error_message = Some(e);
+                                                app.screen = Screen::Error;
+                                            }
+                                        }
                                     } else {
                                         let unc = app.config.as_ref()
                                             .and_then(|c| c.capture_target.as_ref())

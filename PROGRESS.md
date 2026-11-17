@@ -64,13 +64,16 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 4: Configuration Contract
 **Branch:** `phase/04-config-contract`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] Define config.json schema (serde types)
-- [ ] Admin app writes config.json to USB
-- [ ] Agent reads and validates config.json at boot
-- [ ] Mode detection and display (Online/Offline/Hybrid)
-- [ ] Image provider abstraction (network vs local-disk)
+- [x] Config schema with validation (schema_version, mode constraints, discovery rules)
+- [x] Admin app Tauri commands: `build_config` and `validate_config`
+- [x] Agent validates config at boot with structured error reporting
+- [x] Mode detection already displayed (mode badge from Phase 1)
+- [x] Image provider abstraction: `ImageProvider` trait with `LocalDiskProvider` and `NetworkProvider`
+- [x] Provider factory (`create_provider`) selects based on mode, with Hybrid fallback logic
+- [x] Agent confirm screen resolves WIM path through provider instead of hardcoding
+- [x] Added `wim_path` field to `ImageMeta` for explicit WIM location override
 
 ---
 
