@@ -103,6 +103,29 @@ impl ServerClient {
     }
 
     #[allow(dead_code)]
+    pub async fn reconcile_capture(
+        &self,
+        manifest: &imaging_common::types::CaptureManifest,
+    ) -> Result<()> {
+        let token = self
+            .session_token
+            .as_deref()
+            .context("not authenticated")?;
+
+        self.http
+            .post(format!("{}/api/captures/reconcile", self.base_url))
+            .bearer_auth(token)
+            .json(manifest)
+            .send()
+            .await
+            .context("capture reconciliation failed")?
+            .error_for_status()
+            .context("capture reconciliation returned error")?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn is_authenticated(&self) -> bool {
         self.session_token.is_some()
     }

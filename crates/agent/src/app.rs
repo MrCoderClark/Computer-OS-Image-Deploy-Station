@@ -176,10 +176,26 @@ impl AgentApp {
         self.log_lines.clear();
         self.screen = Screen::Progress;
 
+        let capture_target = self.config.as_ref().and_then(|c| c.capture_target.clone());
+        let image_name = self.config.as_ref()
+            .and_then(|c| c.image.as_ref())
+            .map(|i| i.name.clone())
+            .unwrap_or_else(|| format!("capture-{}", self.machine_name));
+        let os_family = self.config.as_ref()
+            .and_then(|c| c.image.as_ref())
+            .map(|i| i.os_family)
+            .unwrap_or(imaging_common::config::OsFamily::Win11);
+        let log_dir = std::path::PathBuf::from(r"X:\imaging\logs");
+
         let request = imaging_engine::pipeline::CaptureRequest {
             job_id,
             source_volume,
             output_wim,
+            machine_name: self.machine_name.clone(),
+            image_name,
+            os_family,
+            capture_target,
+            log_dir,
         };
 
         self.runtime.spawn(async move {
