@@ -35,7 +35,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 2: Network Connectivity
 **Branch:** `phase/02-network-connectivity`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Server skeleton (axum or tonic) — health endpoint
 - [x] Agent connects to server, pulls image list
@@ -47,14 +47,18 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 3: Image Apply (End-to-End)
 **Branch:** `phase/03-image-apply`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] Partition target disk (GPT: ESP + MSR + Windows)
-- [ ] Apply WIM image to Windows partition via WIMGAPI
-- [ ] Configure BCD boot entry
-- [ ] Data channel for bulk image transfer (chunked, hashed)
-- [ ] Resumable transfer with client-generated UUIDs
-- [ ] Full deploy on a blank disk — boot to Windows
+- [x] Engine crate with disk partitioning (diskpart GPT: ESP + MSR + Windows)
+- [x] WIMGAPI FFI bindings via libloading (apply + capture)
+- [x] BCD boot configuration via bcdboot wrapper
+- [x] Deploy pipeline (partition → apply → BCD → complete)
+- [x] Capture pipeline (WIM capture to output path)
+- [x] Agent wired to engine: confirm screen launches pipeline, progress screen shows live status
+- [x] Server: image download endpoint stub, deploy status reporting endpoint
+- [ ] Real image file storage and streaming download *(deferred — stub returns 204)*
+- [ ] Resumable transfer with client-generated UUIDs *(deferred — needs real file I/O)*
+- [ ] Full deploy on a blank disk — boot to Windows *(manual test in WinPE)*
 
 ---
 

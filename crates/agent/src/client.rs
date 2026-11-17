@@ -79,6 +79,30 @@ impl ServerClient {
         Ok(resp.images)
     }
 
+    #[allow(dead_code)]
+    pub async fn report_deploy_status(
+        &self,
+        update: &imaging_common::api::DeployStatusUpdate,
+    ) -> Result<()> {
+        let token = self
+            .session_token
+            .as_deref()
+            .context("not authenticated")?;
+
+        self.http
+            .post(format!("{}/api/deploy/status", self.base_url))
+            .bearer_auth(token)
+            .json(update)
+            .send()
+            .await
+            .context("deploy status report failed")?
+            .error_for_status()
+            .context("deploy status report returned error")?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn is_authenticated(&self) -> bool {
         self.session_token.is_some()
     }

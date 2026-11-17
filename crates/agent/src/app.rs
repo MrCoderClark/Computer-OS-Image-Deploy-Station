@@ -1,6 +1,7 @@
 use imaging_common::api::ImageSummary;
 use imaging_common::config::{OperatingMode, SuiteConfig};
-use std::sync::{Arc, Mutex};
+use imaging_common::types::DeployStatus;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,13 @@ pub enum NetworkEvent {
     Connected,
     Unreachable(String),
     ImagesLoaded(Vec<ImageSummary>),
+    PipelineProgress {
+        status: DeployStatus,
+        progress_pct: u8,
+        message: String,
+    },
+    PipelineComplete,
+    PipelineError(String),
 }
 
 pub struct AgentApp {
@@ -46,8 +54,13 @@ pub struct AgentApp {
     pub error_message: Option<String>,
     pub confirm_text: String,
     pub server_images: Vec<ImageSummary>,
+    pub deploy_status: Option<DeployStatus>,
+    pub deploy_progress: u8,
+    pub deploy_message: String,
+    pub log_lines: Vec<String>,
     net_rx: mpsc::UnboundedReceiver<NetworkEvent>,
-    _runtime: Arc<tokio::runtime::Runtime>,
+    net_tx: mpsc::UnboundedSender<NetworkEvent>,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl AgentApp {
@@ -76,8 +89,9 @@ impl AgentApp {
         if connection == ConnectionStatus::Connecting {
             let server_config = config.as_ref().and_then(|c| c.server.clone());
             let name = machine_name.clone();
+            let connect_tx = net_tx.clone();
             rt.spawn(async move {
-                connect_to_server(server_config, &name, net_tx).await;
+                connect_to_server(server_config, &name, connect_tx).await;
             });
         }
 
@@ -89,13 +103,103 @@ impl AgentApp {
             error_message: None,
             confirm_text: String::new(),
             server_images: Vec::new(),
+            deploy_status: None,
+            deploy_progress: 0,
+            deploy_message: String::new(),
+            log_lines: Vec::new(),
             net_rx,
-            _runtime: rt,
+            net_tx,
+            runtime: rt,
         }
     }
 
     pub fn mode(&self) -> Option<OperatingMode> {
         self.config.as_ref().map(|c| c.mode)
+    }
+
+    pub fn start_deploy(&mut self, target_disk: u32, wim_path: std::path::PathBuf, image_index: u32) {
+        let job_id = uuid::Uuid::new_v4();
+        let tx = self.net_tx.clone();
+        self.deploy_status = Some(DeployStatus::Pending);
+        self.deploy_progress = 0;
+        self.deploy_message = "Starting deploy...".into();
+        self.log_lines.clear();
+        self.screen = Screen::Progress;
+
+        let request = imaging_engine::pipeline::DeployRequest {
+            job_id,
+            target_disk,
+            wim_path,
+            image_index,
+        };
+
+        self.runtime.spawn(async move {
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<imaging_engine::pipeline::PipelineProgress>(32);
+
+            let pipeline_tx = tx.clone();
+            let forward_handle = tokio::spawn(async move {
+                while let Some(p) = progress_rx.recv().await {
+                    let _ = pipeline_tx.send(NetworkEvent::PipelineProgress {
+                        status: p.status,
+                        progress_pct: p.progress_pct,
+                        message: p.message,
+                    });
+                }
+            });
+
+            match imaging_engine::pipeline::run_deploy(request, progress_tx).await {
+                Ok(()) => {
+                    let _ = tx.send(NetworkEvent::PipelineComplete);
+                }
+                Err(e) => {
+                    let _ = tx.send(NetworkEvent::PipelineError(e.to_string()));
+                }
+            }
+
+            let _ = forward_handle.await;
+        });
+    }
+
+    pub fn start_capture(&mut self, source_volume: String, output_wim: std::path::PathBuf) {
+        let job_id = uuid::Uuid::new_v4();
+        let tx = self.net_tx.clone();
+        self.deploy_status = Some(DeployStatus::Pending);
+        self.deploy_progress = 0;
+        self.deploy_message = "Starting capture...".into();
+        self.log_lines.clear();
+        self.screen = Screen::Progress;
+
+        let request = imaging_engine::pipeline::CaptureRequest {
+            job_id,
+            source_volume,
+            output_wim,
+        };
+
+        self.runtime.spawn(async move {
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<imaging_engine::pipeline::PipelineProgress>(32);
+
+            let pipeline_tx = tx.clone();
+            let forward_handle = tokio::spawn(async move {
+                while let Some(p) = progress_rx.recv().await {
+                    let _ = pipeline_tx.send(NetworkEvent::PipelineProgress {
+                        status: p.status,
+                        progress_pct: p.progress_pct,
+                        message: p.message,
+                    });
+                }
+            });
+
+            match imaging_engine::pipeline::run_capture(request, progress_tx).await {
+                Ok(()) => {
+                    let _ = tx.send(NetworkEvent::PipelineComplete);
+                }
+                Err(e) => {
+                    let _ = tx.send(NetworkEvent::PipelineError(e.to_string()));
+                }
+            }
+
+            let _ = forward_handle.await;
+        });
     }
 
     fn poll_network(&mut self) {
@@ -113,6 +217,21 @@ impl AgentApp {
                     tracing::info!("Loaded {} images from server", images.len());
                     self.server_images = images;
                 }
+                NetworkEvent::PipelineProgress { status, progress_pct, message } => {
+                    self.deploy_status = Some(status);
+                    self.deploy_progress = progress_pct;
+                    self.deploy_message = message.clone();
+                    self.log_lines.push(message);
+                }
+                NetworkEvent::PipelineComplete => {
+                    self.deploy_status = Some(DeployStatus::Complete);
+                    self.deploy_progress = 100;
+                    self.screen = Screen::Complete;
+                }
+                NetworkEvent::PipelineError(err) => {
+                    self.error_message = Some(err);
+                    self.screen = Screen::Error;
+                }
             }
         }
     }
@@ -122,7 +241,9 @@ impl eframe::App for AgentApp {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         self.poll_network();
 
-        if self.connection == ConnectionStatus::Connecting {
+        let needs_repaint = self.connection == ConnectionStatus::Connecting
+            || self.screen == Screen::Progress;
+        if needs_repaint {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 

@@ -1,10 +1,11 @@
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use imaging_common::api::*;
+use uuid::Uuid;
 use crate::state::AppState;
 
 pub fn api_routes() -> Router<AppState> {
@@ -12,6 +13,8 @@ pub fn api_routes() -> Router<AppState> {
         .route("/health", get(health))
         .route("/api/auth", post(authenticate))
         .route("/api/images", get(list_images))
+        .route("/api/images/{id}/download", get(download_image))
+        .route("/api/deploy/status", post(report_deploy_status))
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -63,4 +66,80 @@ async fn list_images(
         .collect();
 
     Ok(Json(ImageListResponse { images: summaries }))
+}
+
+#[derive(serde::Deserialize)]
+struct DownloadQuery {
+    #[serde(default)]
+    transfer_id: Option<Uuid>,
+    #[serde(default)]
+    offset: Option<u64>,
+}
+
+async fn download_image(
+    State(state): State<AppState>,
+    Path(image_id): Path<Uuid>,
+    Query(query): Query<DownloadQuery>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let token = match token {
+        Some(t) => t,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    if state.validate_session(token).await.is_none() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let images = state.images.read().await;
+    let _image = images
+        .iter()
+        .find(|img| img.id == image_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let transfer_id = query.transfer_id.unwrap_or_else(Uuid::new_v4);
+    let offset = query.offset.unwrap_or(0);
+
+    tracing::info!(
+        "Download requested: image={image_id}, transfer={transfer_id}, offset={offset}"
+    );
+
+    // TODO: Stream WIM file bytes from image store once real storage is wired up.
+    // For now, acknowledge the request and return 204 (no content to serve yet).
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn report_deploy_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(update): Json<DeployStatusUpdate>,
+) -> Result<StatusCode, StatusCode> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let token = match token {
+        Some(t) => t,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    if state.validate_session(token).await.is_none() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    tracing::info!(
+        "Deploy status: job={} status={:?} {}% — {}",
+        update.job_id,
+        update.status,
+        update.progress_pct,
+        update.message,
+    );
+
+    Ok(StatusCode::OK)
 }
