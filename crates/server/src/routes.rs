@@ -7,7 +7,10 @@ use axum::{
 use imaging_common::api::*;
 use imaging_common::driver::DriverPack;
 use imaging_common::sequence::TaskSequence;
+use imaging_common::types::AuditLevel;
 use uuid::Uuid;
+
+use crate::db;
 use crate::state::AppState;
 
 pub fn api_routes() -> Router<AppState> {
@@ -17,11 +20,14 @@ pub fn api_routes() -> Router<AppState> {
         .route("/api/images", get(list_images))
         .route("/api/images/{id}/download", get(download_image))
         .route("/api/deploy/status", post(report_deploy_status))
+        .route("/api/deploy/jobs", get(list_deploy_jobs))
         .route("/api/captures/reconcile", post(reconcile_capture))
         .route("/api/sequences", get(list_sequences).post(save_sequence))
         .route("/api/sequences/{id}", get(get_sequence).delete(delete_sequence))
         .route("/api/drivers", get(list_driver_packs).post(save_driver_pack))
         .route("/api/drivers/{id}", delete(delete_driver_pack))
+        .route("/api/audit", get(query_audit_log))
+        .route("/api/audit/export", get(export_audit_csv))
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -36,6 +42,9 @@ async fn authenticate(
     Json(req): Json<AuthRequest>,
 ) -> Json<AuthResponse> {
     tracing::info!("Auth request from machine: {}", req.machine_name);
+    let db = state.db.lock().await;
+    db::audit(&db, &req.machine_name, "auth", &req.machine_name, None, AuditLevel::Info);
+    drop(db);
     let response = state.create_session(&req.machine_name).await;
     Json(response)
 }
@@ -44,21 +53,11 @@ async fn list_images(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ImageListResponse>, StatusCode> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+    extract_session(&state, &headers).await?;
 
-    let token = match token {
-        Some(t) => t,
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
+    let db = state.db.lock().await;
+    let images = db.list_images().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if state.validate_session(token).await.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    let images = state.images.read().await;
     let summaries: Vec<ImageSummary> = images
         .iter()
         .map(|img| ImageSummary {
@@ -89,25 +88,7 @@ async fn download_image(
     Query(query): Query<DownloadQuery>,
     headers: HeaderMap,
 ) -> Result<StatusCode, StatusCode> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    let token = match token {
-        Some(t) => t,
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
-
-    if state.validate_session(token).await.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    let images = state.images.read().await;
-    let _image = images
-        .iter()
-        .find(|img| img.id == image_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    extract_session(&state, &headers).await?;
 
     let transfer_id = query.transfer_id.unwrap_or_else(Uuid::new_v4);
     let offset = query.offset.unwrap_or(0);
@@ -116,8 +97,6 @@ async fn download_image(
         "Download requested: image={image_id}, transfer={transfer_id}, offset={offset}"
     );
 
-    // TODO: Stream WIM file bytes from image store once real storage is wired up.
-    // For now, acknowledge the request and return 204 (no content to serve yet).
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -126,29 +105,39 @@ async fn report_deploy_status(
     headers: HeaderMap,
     Json(update): Json<DeployStatusUpdate>,
 ) -> Result<StatusCode, StatusCode> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    let token = match token {
-        Some(t) => t,
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
-
-    if state.validate_session(token).await.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
+    let claims = extract_session(&state, &headers).await?;
 
     tracing::info!(
         "Deploy status: job={} status={:?} {}% — {}",
-        update.job_id,
-        update.status,
-        update.progress_pct,
-        update.message,
+        update.job_id, update.status, update.progress_pct, update.message,
     );
 
+    let job = imaging_common::types::DeployJob {
+        id: update.job_id,
+        machine_name: claims.machine_name.clone(),
+        image_id: Uuid::nil(),
+        status: update.status,
+        progress_pct: update.progress_pct,
+        started_at: chrono::Utc::now(),
+        started_by: claims.machine_name.clone(),
+    };
+
+    let db = state.db.lock().await;
+    db.upsert_deploy_job(&job, &update.message).ok();
+    db::audit(&db, &claims.machine_name, "deploy_status", &update.job_id.to_string(), Some(&update.message), AuditLevel::Info);
+
     Ok(StatusCode::OK)
+}
+
+async fn list_deploy_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<db::DeployJobRow>>, StatusCode> {
+    extract_session(&state, &headers).await?;
+
+    let db = state.db.lock().await;
+    let jobs = db.list_deploy_jobs().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(jobs))
 }
 
 async fn reconcile_capture(
@@ -156,40 +145,27 @@ async fn reconcile_capture(
     headers: HeaderMap,
     Json(manifest): Json<imaging_common::types::CaptureManifest>,
 ) -> Result<StatusCode, StatusCode> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    let token = match token {
-        Some(t) => t,
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
-
-    if state.validate_session(token).await.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
+    let claims = extract_session(&state, &headers).await?;
 
     tracing::info!(
         "Capture reconciliation: id={}, image={}, machine={}, size={} bytes",
-        manifest.id,
-        manifest.image_name,
-        manifest.source_machine,
-        manifest.size_bytes,
+        manifest.id, manifest.image_name, manifest.source_machine, manifest.size_bytes,
     );
 
     let record = imaging_common::types::ImageRecord {
         id: manifest.id,
-        name: manifest.image_name,
+        name: manifest.image_name.clone(),
         os_family: manifest.os_family,
-        captured_from: Some(manifest.source_machine),
+        captured_from: Some(manifest.source_machine.clone()),
         build_date: manifest.captured_at.date_naive(),
         size_bytes: manifest.size_bytes,
         sha256: manifest.sha256,
         created_at: manifest.captured_at,
     };
 
-    state.images.write().await.push(record);
+    let db = state.db.lock().await;
+    db.insert_image(&record).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    db::audit(&db, &claims.machine_name, "capture_reconcile", &manifest.image_name, Some(&manifest.source_machine), AuditLevel::Info);
 
     tracing::info!("Capture registered in image catalogue");
     Ok(StatusCode::CREATED)
@@ -199,19 +175,20 @@ async fn reconcile_capture(
 
 async fn list_sequences(
     State(state): State<AppState>,
-) -> Json<Vec<TaskSequence>> {
-    let seqs = state.sequences.read().await;
-    Json(seqs.clone())
+) -> Result<Json<Vec<TaskSequence>>, StatusCode> {
+    let db = state.db.lock().await;
+    let seqs = db.list_sequences().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(seqs))
 }
 
 async fn get_sequence(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskSequence>, StatusCode> {
-    let seqs = state.sequences.read().await;
-    seqs.iter()
+    let db = state.db.lock().await;
+    let seqs = db.list_sequences().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    seqs.into_iter()
         .find(|s| s.id == id)
-        .cloned()
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
@@ -224,18 +201,10 @@ async fn save_sequence(
         return Err((StatusCode::BAD_REQUEST, errors.join("; ")));
     }
 
-    let mut seqs = state.sequences.write().await;
-    if let Some(existing) = seqs.iter_mut().find(|s| s.id == seq.id) {
-        seq.updated_at = chrono::Utc::now();
-        *existing = seq.clone();
-        tracing::info!("Updated task sequence: {}", seq.name);
-    } else {
-        let now = chrono::Utc::now();
-        seq.created_at = now;
-        seq.updated_at = now;
-        seqs.push(seq.clone());
-        tracing::info!("Created task sequence: {}", seq.name);
-    }
+    seq.updated_at = chrono::Utc::now();
+    let db = state.db.lock().await;
+    db.upsert_sequence(&seq).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db::audit(&db, "admin", "save_sequence", &seq.name, None, AuditLevel::Info);
 
     Ok(Json(seq))
 }
@@ -244,11 +213,10 @@ async fn delete_sequence(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut seqs = state.sequences.write().await;
-    let len_before = seqs.len();
-    seqs.retain(|s| s.id != id);
-    if seqs.len() < len_before {
-        tracing::info!("Deleted task sequence: {id}");
+    let db = state.db.lock().await;
+    let deleted = db.delete_sequence(&id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if deleted {
+        db::audit(&db, "admin", "delete_sequence", &id.to_string(), None, AuditLevel::Warning);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -259,38 +227,98 @@ async fn delete_sequence(
 
 async fn list_driver_packs(
     State(state): State<AppState>,
-) -> Json<Vec<DriverPack>> {
-    let packs = state.driver_packs.read().await;
-    Json(packs.clone())
+) -> Result<Json<Vec<DriverPack>>, StatusCode> {
+    let db = state.db.lock().await;
+    let packs = db.list_driver_packs().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(packs))
 }
 
 async fn save_driver_pack(
     State(state): State<AppState>,
     Json(mut pack): Json<DriverPack>,
-) -> Json<DriverPack> {
-    let mut packs = state.driver_packs.write().await;
-    if let Some(existing) = packs.iter_mut().find(|p| p.id == pack.id) {
-        *existing = pack.clone();
-        tracing::info!("Updated driver pack: {}", pack.name);
-    } else {
-        pack.created_at = chrono::Utc::now();
-        packs.push(pack.clone());
-        tracing::info!("Created driver pack: {}", pack.name);
-    }
-    Json(pack)
+) -> Result<Json<DriverPack>, StatusCode> {
+    pack.created_at = chrono::Utc::now();
+    let db = state.db.lock().await;
+    db.upsert_driver_pack(&pack).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    db::audit(&db, "admin", "save_driver_pack", &pack.name, None, AuditLevel::Info);
+    Ok(Json(pack))
 }
 
 async fn delete_driver_pack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut packs = state.driver_packs.write().await;
-    let len_before = packs.len();
-    packs.retain(|p| p.id != id);
-    if packs.len() < len_before {
-        tracing::info!("Deleted driver pack: {id}");
+    let db = state.db.lock().await;
+    let deleted = db.delete_driver_pack(&id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if deleted {
+        db::audit(&db, "admin", "delete_driver_pack", &id.to_string(), None, AuditLevel::Warning);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)
     }
+}
+
+// --- Audit Log ---
+
+#[derive(serde::Deserialize)]
+struct AuditQuery {
+    #[serde(default)]
+    search: Option<String>,
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: u32,
+}
+
+fn default_limit() -> u32 { 200 }
+
+async fn query_audit_log(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AuditQuery>,
+) -> Result<Json<Vec<imaging_common::types::AuditEntry>>, StatusCode> {
+    extract_session(&state, &headers).await?;
+
+    let db = state.db.lock().await;
+    let entries = db.query_audit(q.search.as_deref(), q.level.as_deref(), q.limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(entries))
+}
+
+async fn export_audit_csv(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AuditQuery>,
+) -> Result<(HeaderMap, String), StatusCode> {
+    extract_session(&state, &headers).await?;
+
+    let db = state.db.lock().await;
+    let entries = db.query_audit(q.search.as_deref(), q.level.as_deref(), q.limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut csv = String::from("Timestamp,Actor,Action,Target,Detail,Level\n");
+    for e in &entries {
+        let detail = e.detail.as_deref().unwrap_or("");
+        csv.push_str(&format!(
+            "{},{},{},{},\"{}\",{:?}\n",
+            e.timestamp.to_rfc3339(), e.actor, e.action, e.target, detail.replace('"', "\"\""), e.level
+        ));
+    }
+
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert("content-type", "text/csv".parse().unwrap());
+    resp_headers.insert("content-disposition", "attachment; filename=\"audit_log.csv\"".parse().unwrap());
+    Ok((resp_headers, csv))
+}
+
+// --- Helpers ---
+
+async fn extract_session(state: &AppState, headers: &HeaderMap) -> Result<SessionClaims, StatusCode> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    state.validate_session(token).await.ok_or(StatusCode::UNAUTHORIZED)
 }

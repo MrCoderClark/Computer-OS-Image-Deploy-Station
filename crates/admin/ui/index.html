@@ -567,6 +567,36 @@
     .driver-form-row { display: flex; gap: 12px; margin-bottom: 10px; }
     .driver-form-row .form-group { flex: 1; }
 
+    /* Deploy & Audit tables */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .data-table th {
+      text-align: left; padding: 8px 12px; font-weight: 600; font-size: 12px;
+      color: var(--text-muted); border-bottom: 1px solid var(--surface-border);
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .data-table td { padding: 8px 12px; border-bottom: 1px solid var(--surface-border); }
+    .data-table tr:hover td { background: var(--hover); }
+    .status-badge {
+      display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
+      border-radius: 4px; text-transform: capitalize;
+    }
+    .status-complete { background: #e6f4ea; color: #0f7b0f; }
+    .status-failed { background: #fde8e8; color: #c42b1c; }
+    .status-pending { background: var(--accent-bg); color: var(--accent); }
+    .status-active { background: #fff4ce; color: #9d5d00; }
+    @media (prefers-color-scheme: dark) {
+      .status-complete { background: #1a3a1a; color: #6ccb5f; }
+      .status-failed { background: #3a1a1a; color: #ff6961; }
+      .status-active { background: #3a2f1a; color: #fce100; }
+    }
+    .level-badge { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+    .level-info { color: var(--accent); }
+    .level-warning { color: var(--warning); }
+    .level-error { color: var(--error); }
+    .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    .toolbar .form-input { max-width: 260px; }
+    .toolbar select.form-input { max-width: 140px; }
+
     /* Toast notifications */
     .toast-container {
       position: fixed; top: 16px; right: 16px; z-index: 9999;
@@ -910,16 +940,34 @@
       </div>
     </div>
 
-    <!-- Deployments (placeholder) -->
+    <!-- Deployments -->
     <div class="page" id="page-deployments">
       <h1 class="page-title">Deployments</h1>
-      <div class="empty-state">Deployment monitoring will be available in Phase 9.</div>
+      <div class="toolbar">
+        <button class="btn" id="deploy-refresh-btn">Refresh</button>
+      </div>
+      <div id="deploy-table-wrap">
+        <div class="empty-state" id="deploy-empty">No deployment jobs found. Jobs appear here when agents report status.</div>
+      </div>
     </div>
 
-    <!-- Audit Log (placeholder) -->
+    <!-- Audit Log -->
     <div class="page" id="page-audit">
       <h1 class="page-title">Audit Log</h1>
-      <div class="empty-state">Audit log viewer will be available in Phase 9.</div>
+      <div class="toolbar">
+        <input class="form-input" id="audit-search" placeholder="Search actor, action, target...">
+        <select class="form-input" id="audit-level-filter">
+          <option value="">All levels</option>
+          <option value="info">Info</option>
+          <option value="warning">Warning</option>
+          <option value="error">Error</option>
+        </select>
+        <button class="btn" id="audit-search-btn">Search</button>
+        <button class="btn" id="audit-export-btn">Export CSV</button>
+      </div>
+      <div id="audit-table-wrap">
+        <div class="empty-state" id="audit-empty">No audit entries found.</div>
+      </div>
     </div>
 
     <!-- Settings -->
@@ -1408,6 +1456,108 @@
       });
     }
 
+    // === Deployments ===
+    let allDeployJobs = [];
+
+    document.getElementById('deploy-refresh-btn').addEventListener('click', loadDeployJobs);
+
+    async function loadDeployJobs() {
+      const wrap = document.getElementById('deploy-table-wrap');
+      wrap.innerHTML = '<div class="empty-state">Loading...</div>';
+      try {
+        allDeployJobs = await invoke('get_deploy_jobs');
+        renderDeployTable();
+      } catch (e) {
+        wrap.innerHTML = '<div class="empty-state">Failed to load deployments. Is the server running?</div>';
+        console.error('load deploy jobs', e);
+      }
+    }
+
+    function renderDeployTable() {
+      const wrap = document.getElementById('deploy-table-wrap');
+      if (allDeployJobs.length === 0) {
+        wrap.innerHTML = '<div class="empty-state">No deployment jobs found. Jobs appear here when agents report status.</div>';
+        return;
+      }
+      wrap.innerHTML = `<table class="data-table"><thead><tr>
+        <th>Machine</th><th>Image</th><th>Status</th><th>Progress</th><th>Started</th><th>Message</th>
+      </tr></thead><tbody>${allDeployJobs.map(j => {
+        const sc = j.status.toLowerCase();
+        const badge = `<span class="status-badge status-${sc}">${j.status}</span>`;
+        const pct = j.progress_pct + '%';
+        const time = j.started_at ? new Date(j.started_at).toLocaleString() : '—';
+        return `<tr>
+          <td>${j.machine_name}</td>
+          <td style="font-size:12px;color:var(--text-muted)">${j.image_id}</td>
+          <td>${badge}</td>
+          <td><div style="display:flex;align-items:center;gap:6px"><div style="flex:1;height:5px;background:var(--surface-border);border-radius:3px;overflow:hidden"><div style="height:100%;background:var(--accent);width:${j.progress_pct}%"></div></div><span style="font-size:12px;min-width:32px;text-align:right">${pct}</span></div></td>
+          <td style="white-space:nowrap;font-size:12px">${time}</td>
+          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(j.message||'').replace(/"/g,'&quot;')}">${j.message || '—'}</td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+    }
+
+    // === Audit Log ===
+    let allAuditEntries = [];
+
+    document.getElementById('audit-search-btn').addEventListener('click', loadAuditLog);
+    document.getElementById('audit-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadAuditLog(); });
+    document.getElementById('audit-export-btn').addEventListener('click', exportAuditCsv);
+
+    async function loadAuditLog() {
+      const wrap = document.getElementById('audit-table-wrap');
+      wrap.innerHTML = '<div class="empty-state">Loading...</div>';
+      const search = document.getElementById('audit-search').value.trim() || null;
+      const level = document.getElementById('audit-level-filter').value || null;
+      try {
+        allAuditEntries = await invoke('get_audit_log', { search, level });
+        renderAuditTable();
+      } catch (e) {
+        wrap.innerHTML = '<div class="empty-state">Failed to load audit log. Is the server running?</div>';
+        console.error('load audit', e);
+      }
+    }
+
+    function renderAuditTable() {
+      const wrap = document.getElementById('audit-table-wrap');
+      if (allAuditEntries.length === 0) {
+        wrap.innerHTML = '<div class="empty-state">No audit entries found.</div>';
+        return;
+      }
+      wrap.innerHTML = `<table class="data-table"><thead><tr>
+        <th>Timestamp</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th><th>Level</th>
+      </tr></thead><tbody>${allAuditEntries.map(e => {
+        const time = e.timestamp ? new Date(e.timestamp).toLocaleString() : '—';
+        const lc = (e.level || 'info').toLowerCase();
+        return `<tr>
+          <td style="white-space:nowrap;font-size:12px">${time}</td>
+          <td>${e.actor}</td>
+          <td><code style="font-size:12px">${e.action}</code></td>
+          <td>${e.target}</td>
+          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(e.detail||'').replace(/"/g,'&quot;')}">${e.detail || '—'}</td>
+          <td><span class="level-badge level-${lc}">${e.level}</span></td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+    }
+
+    async function exportAuditCsv() {
+      try {
+        const csv = await invoke('export_audit_csv');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'audit_log.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast('Audit log exported', 'success');
+      } catch (e) {
+        showToast('Export failed: ' + e, 'error');
+      }
+    }
+
     // Load data when navigating to these pages
     const origNavHandler = document.querySelectorAll('.nav-item');
     origNavHandler.forEach(item => {
@@ -1415,6 +1565,8 @@
         const page = item.dataset.page;
         if (page === 'sequences') loadSequences();
         if (page === 'drivers') loadDriverPacks();
+        if (page === 'deployments') loadDeployJobs();
+        if (page === 'audit') loadAuditLog();
       });
     });
 

@@ -1,3 +1,4 @@
+mod db;
 mod state;
 mod routes;
 
@@ -11,7 +12,20 @@ async fn main() -> Result<()> {
         .with_env_filter("imaging_server=debug,tower_http=debug")
         .init();
 
-    let app_state = state::AppState::new_with_samples();
+    let db_path = std::path::PathBuf::from("imaging-server.db");
+    let database = db::Database::open(&db_path)?;
+
+    let app_state = state::AppState::new(database);
+
+    let needs_seed = {
+        let db = app_state.db.lock().await;
+        db.list_images().map(|imgs| imgs.is_empty()).unwrap_or(true)
+    };
+    if needs_seed {
+        let state_clone = app_state.clone();
+        tokio::task::spawn_blocking(move || state_clone.seed_sample_images()).await?;
+        info!("Seeded sample images into database");
+    }
 
     let app = Router::new()
         .merge(routes::api_routes())

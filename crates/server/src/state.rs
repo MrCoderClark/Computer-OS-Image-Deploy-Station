@@ -1,24 +1,30 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 use imaging_common::api::{AuthResponse, SessionClaims};
-use imaging_common::driver::DriverPack;
-use imaging_common::sequence::TaskSequence;
-use imaging_common::types::ImageRecord;
+use imaging_common::types::AuditLevel;
+
+use crate::db::{self, Database};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub images: Arc<RwLock<Vec<ImageRecord>>>,
+    pub db: Arc<Mutex<Database>>,
     pub sessions: Arc<RwLock<HashMap<String, SessionClaims>>>,
-    pub sequences: Arc<RwLock<Vec<TaskSequence>>>,
-    pub driver_packs: Arc<RwLock<Vec<DriverPack>>>,
 }
 
 impl AppState {
-    pub fn new_with_samples() -> Self {
-        let images = vec![
-            ImageRecord {
+    pub fn new(db: Database) -> Self {
+        Self {
+            db: Arc::new(Mutex::new(db)),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn seed_sample_images(&self) {
+        let db = self.db.blocking_lock();
+        let samples = vec![
+            imaging_common::types::ImageRecord {
                 id: Uuid::new_v4(),
                 name: "Win11-24H2-Base".into(),
                 os_family: imaging_common::config::OsFamily::Win11,
@@ -28,7 +34,7 @@ impl AppState {
                 sha256: "a1b2c3d4e5f6...".into(),
                 created_at: chrono::Utc::now(),
             },
-            ImageRecord {
+            imaging_common::types::ImageRecord {
                 id: Uuid::new_v4(),
                 name: "Win11-24H2-Dev".into(),
                 os_family: imaging_common::config::OsFamily::Win11,
@@ -38,7 +44,7 @@ impl AppState {
                 sha256: "f6e5d4c3b2a1...".into(),
                 created_at: chrono::Utc::now(),
             },
-            ImageRecord {
+            imaging_common::types::ImageRecord {
                 id: Uuid::new_v4(),
                 name: "Win10-22H2-Legacy".into(),
                 os_family: imaging_common::config::OsFamily::Win10,
@@ -50,12 +56,13 @@ impl AppState {
             },
         ];
 
-        Self {
-            images: Arc::new(RwLock::new(images)),
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            sequences: Arc::new(RwLock::new(Vec::new())),
-            driver_packs: Arc::new(RwLock::new(Vec::new())),
+        for img in &samples {
+            if let Err(e) = db.insert_image(img) {
+                tracing::warn!("Failed to seed image: {e}");
+            }
         }
+
+        db::audit(&db, "system", "server_start", "imaging-server", Some("Seeded sample images"), AuditLevel::Info);
     }
 
     pub async fn create_session(&self, machine_name: &str) -> AuthResponse {

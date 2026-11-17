@@ -35,5 +35,14 @@ Desktop.ini
 *.wim
 *.iso
 
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Generated
+/crates/admin/src-tauri/gen/
+/config.json
+
 # Logs
 *.log

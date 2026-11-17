@@ -111,7 +111,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 7: Admin App — Media Builder
 **Branch:** `phase/07-media-builder`
-**Status:** In progress
+**Status:** Complete
 
 - [x] USB device detection and enumeration (PowerShell Get-Volume)
 - [x] Build Media wizard (5-step flow: Mode → Image → Target → Config → Build)
@@ -126,7 +126,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 8: Admin App — Task Sequences & Drivers
 **Branch:** `phase/08-task-sequences-drivers`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Task sequence data model (common crate: TaskSequence, TaskStep, StepType, StepConfig)
 - [x] Step types: partition, apply_image, inject_drivers, run_script, domain_join, generate_unattend, reboot
@@ -145,14 +145,20 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 9: Deployment Monitoring & Audit
 **Branch:** `phase/09-monitoring-audit`
-**Status:** Not started
+**Status:** Complete
 
-- [ ] Deployment tracking table (live WebSocket updates)
-- [ ] Concurrency and locking (claim a host mid-deploy)
-- [ ] Audit log: who imaged what, when, from which image
-- [ ] Audit log search, filter, CSV export
-- [ ] Credential rotation reminders
-- [ ] Capture reconciliation from shared drive
+- [x] SQLite persistence for server (images, deploy_jobs, audit_log, sequences, driver_packs)
+- [x] SQLite persistence for admin app (sequences, driver_packs, settings)
+- [x] All CRUD operations backed by database (replaced in-memory stores)
+- [x] Deploy job tracking: server stores status updates, admin fetches and displays table
+- [x] Deployment monitoring UI: table with machine, image, status badge, progress bar, timestamps
+- [x] Audit log: automatic entries on auth, deploy, capture, sequence/driver CRUD
+- [x] Audit log viewer UI: search by text, filter by level, tabular display
+- [x] Audit log CSV export (server endpoint + admin download)
+- [x] Server seeds sample images on first run (empty database)
+- [ ] Live WebSocket updates for deployment status *(deferred — polling via refresh button)*
+- [ ] Concurrency and locking (claim a host mid-deploy) *(deferred)*
+- [ ] Credential rotation reminders *(deferred)*
 
 ---
 
