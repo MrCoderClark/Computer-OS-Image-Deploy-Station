@@ -47,7 +47,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 3: Image Apply (End-to-End)
 **Branch:** `phase/03-image-apply`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Engine crate with disk partitioning (diskpart GPT: ESP + MSR + Windows)
 - [x] WIMGAPI FFI bindings via libloading (apply + capture)
@@ -95,7 +95,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 6: Admin App — Core UI
 **Branch:** `phase/06-admin-core-ui`
-**Status:** In progress
+**Status:** Complete
 
 - [x] App shell: sidebar navigation with section headers, page routing
 - [x] Dashboard: live stats from server (deploys, images, media, captures), server status indicator
@@ -111,14 +111,16 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 7: Admin App — Media Builder
 **Branch:** `phase/07-media-builder`
-**Status:** Not started
+**Status:** In progress
 
-- [ ] USB device detection and enumeration
-- [ ] Build Media wizard (5-step flow)
-- [ ] Partition USB (FAT32 boot + optional NTFS payload)
-- [ ] Copy WinPE boot.wim, agent binary, config.json
-- [ ] Mode selection → config generation
-- [ ] Progress reporting during build
+- [x] USB device detection and enumeration (PowerShell Get-Volume)
+- [x] Build Media wizard (5-step flow: Mode → Image → Target → Config → Build)
+- [ ] Partition USB (FAT32 boot + optional NTFS payload) *(deferred — requires ADK elevated tools)*
+- [ ] Copy WinPE boot.wim, agent binary, config.json *(deferred — build-winpe-media.ps1 handles this)*
+- [x] Mode selection → config generation (reuses build_config command)
+- [x] Progress reporting during build
+- [x] Wizard frontend: step navigation, image picker, USB picker, summary, build trigger
+- [x] Tauri backend: list_usb_devices, build_media commands
 
 ---
 
