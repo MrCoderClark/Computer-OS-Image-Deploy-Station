@@ -1,14 +1,13 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui-packs/refs/heads/main/nicegui/schema.json",
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui-packs/refs/heads/main/tauri/schema.json",
   "productName": "DeployStation",
   "version": "0.1.0",
   "identifier": "com.deploystation.admin",
   "build": {
-    "frontendDist": "../ui",
-    "devUrl": "http://localhost:5173"
+    "frontendDist": "../ui"
   },
   "app": {
-    "title": "DeployStation — Windows Imaging Suite",
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "DeployStation — Windows Imaging Suite",

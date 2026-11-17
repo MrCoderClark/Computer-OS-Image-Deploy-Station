@@ -14,6 +14,26 @@ pub struct ConfigBuildRequest {
     pub capture_account: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DashboardStats {
+    pub active_deploys: u32,
+    pub images_count: u32,
+    pub media_built: u32,
+    pub captures_pending: u32,
+    pub server_connected: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImageEntry {
+    pub id: String,
+    pub name: String,
+    pub os_family: String,
+    pub captured_from: Option<String>,
+    pub build_date: Option<String>,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
 #[tauri::command]
 fn get_mode() -> String {
     "No configuration loaded".to_string()
@@ -22,6 +42,68 @@ fn get_mode() -> String {
 #[tauri::command]
 fn get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+async fn get_dashboard_stats(state: tauri::State<'_, AppConfig>) -> Result<DashboardStats, String> {
+    let images = fetch_images_from_server(&state).await;
+    let count = images.as_ref().map(|v| v.len() as u32).unwrap_or(0);
+
+    Ok(DashboardStats {
+        active_deploys: 0,
+        images_count: count,
+        media_built: 0,
+        captures_pending: 0,
+        server_connected: images.is_ok(),
+    })
+}
+
+#[tauri::command]
+async fn get_images(state: tauri::State<'_, AppConfig>) -> Result<Vec<ImageEntry>, String> {
+    let images = fetch_images_from_server(&state).await.map_err(|e| e.to_string())?;
+    Ok(images)
+}
+
+async fn fetch_images_from_server(config: &AppConfig) -> anyhow::Result<Vec<ImageEntry>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+
+    let base = format!("http://{}:{}", config.server_host, config.server_port);
+
+    let auth_resp = client
+        .post(format!("{base}/api/auth"))
+        .json(&serde_json::json!({
+            "machine_name": config.hostname,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<imaging_common::api::AuthResponse>()
+        .await?;
+
+    let list_resp = client
+        .get(format!("{base}/api/images"))
+        .bearer_auth(&auth_resp.session_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<imaging_common::api::ImageListResponse>()
+        .await?;
+
+    Ok(list_resp
+        .images
+        .into_iter()
+        .map(|img| ImageEntry {
+            id: img.id.to_string(),
+            name: img.name,
+            os_family: format!("{}", img.os_family),
+            captured_from: img.captured_from,
+            build_date: img.build_date,
+            size_bytes: img.size_bytes,
+            sha256: img.sha256,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -73,17 +155,15 @@ fn build_config(request: ConfigBuildRequest) -> Result<String, String> {
         account: request.capture_account.unwrap_or_default(),
     });
 
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "admin".into());
-
     let config = SuiteConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
         mode,
         server,
         capture_target,
         image,
-        built_by: hostname,
+        built_by: hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "admin".into()),
         built_at: chrono::Utc::now(),
     };
 
@@ -105,6 +185,12 @@ fn validate_config(json_str: String) -> Result<String, String> {
     }
 }
 
+struct AppConfig {
+    server_host: String,
+    server_port: u16,
+    hostname: String,
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -113,11 +199,24 @@ pub fn run() {
                 .init();
 
             tracing::info!("DeployStation Admin v{}", app.package_info().version);
+
+            let hostname = hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "admin".into());
+
+            app.manage(AppConfig {
+                server_host: "127.0.0.1".into(),
+                server_port: 7443,
+                hostname,
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_mode,
             get_version,
+            get_dashboard_stats,
+            get_images,
             build_config,
             validate_config,
         ])
