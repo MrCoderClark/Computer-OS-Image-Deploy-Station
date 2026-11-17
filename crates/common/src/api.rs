@@ -41,3 +41,18 @@ pub struct SessionClaims {
     pub issued_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadRequest {
+    pub image_id: Uuid,
+    pub transfer_id: Uuid,
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployStatusUpdate {
+    pub job_id: Uuid,
+    pub status: crate::types::DeployStatus,
+    pub progress_pct: u8,
+    pub message: String,
+}

@@ -98,7 +98,18 @@ pub fn show(ctx: &egui::Context, app: &mut AgentApp, is_deploy: bool) {
                                 let resp = ui.add_enabled(confirmed, btn);
                                 if resp.clicked() {
                                     app.confirm_text.clear();
-                                    app.screen = Screen::Progress;
+                                    if is_deploy {
+                                        let wim_path = std::path::PathBuf::from(r"X:\imaging\install.wim");
+                                        app.start_deploy(0, wim_path, 1);
+                                    } else {
+                                        let unc = app.config.as_ref()
+                                            .and_then(|c| c.capture_target.as_ref())
+                                            .map(|t| t.unc_path.clone())
+                                            .unwrap_or_else(|| r"\\server\captures".into());
+                                        let output = std::path::PathBuf::from(unc)
+                                            .join(format!("{}.wim", app.machine_name));
+                                        app.start_capture("C:".into(), output);
+                                    }
                                 }
                             });
                         });
