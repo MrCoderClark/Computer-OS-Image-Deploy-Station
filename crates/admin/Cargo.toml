@@ -1,0 +1,7 @@
+[package]
+name = "imaging-admin"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+imaging-common = { path = "../common" }
