@@ -1,10 +1,12 @@
+mod db;
+
 use imaging_common::config::*;
 use imaging_common::driver::DriverPack;
 use imaging_common::sequence::{TaskSequence, TaskStep, StepType, StepConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -325,45 +327,36 @@ struct AppConfig {
     hostname: String,
 }
 
-struct SequenceStore(Arc<RwLock<Vec<TaskSequence>>>);
-struct DriverStore(Arc<RwLock<Vec<DriverPack>>>);
+struct DbStore(Arc<Mutex<db::AdminDb>>);
 
 // --- Task Sequences ---
 
 #[tauri::command]
-async fn get_sequences(store: tauri::State<'_, SequenceStore>) -> Result<Vec<TaskSequence>, String> {
-    Ok(store.0.read().await.clone())
+async fn get_sequences(store: tauri::State<'_, DbStore>) -> Result<Vec<TaskSequence>, String> {
+    let db = store.0.lock().await;
+    db.list_sequences().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn save_sequence(store: tauri::State<'_, SequenceStore>, sequence: TaskSequence) -> Result<TaskSequence, String> {
+async fn save_sequence(store: tauri::State<'_, DbStore>, sequence: TaskSequence) -> Result<TaskSequence, String> {
     if let Err(errors) = sequence.validate() {
         return Err(errors.join("; "));
     }
 
-    let mut seqs = store.0.write().await;
-    if let Some(existing) = seqs.iter_mut().find(|s| s.id == sequence.id) {
-        let mut updated = sequence;
-        updated.updated_at = chrono::Utc::now();
-        *existing = updated.clone();
-        Ok(updated)
-    } else {
-        let mut new_seq = sequence;
-        let now = chrono::Utc::now();
-        new_seq.created_at = now;
-        new_seq.updated_at = now;
-        seqs.push(new_seq.clone());
-        Ok(new_seq)
-    }
+    let mut seq = sequence;
+    seq.updated_at = chrono::Utc::now();
+
+    let db = store.0.lock().await;
+    db.upsert_sequence(&seq).map_err(|e| e.to_string())?;
+    Ok(seq)
 }
 
 #[tauri::command]
-async fn delete_sequence(store: tauri::State<'_, SequenceStore>, id: String) -> Result<(), String> {
+async fn delete_sequence(store: tauri::State<'_, DbStore>, id: String) -> Result<(), String> {
     let uuid: Uuid = id.parse().map_err(|e| format!("Invalid UUID: {e}"))?;
-    let mut seqs = store.0.write().await;
-    let len_before = seqs.len();
-    seqs.retain(|s| s.id != uuid);
-    if seqs.len() < len_before {
+    let db = store.0.lock().await;
+    let deleted = db.delete_sequence(&uuid).map_err(|e| e.to_string())?;
+    if deleted {
         Ok(())
     } else {
         Err("Sequence not found".into())
@@ -458,31 +451,28 @@ fn new_step(step_type: String) -> Result<TaskStep, String> {
 // --- Driver Packs ---
 
 #[tauri::command]
-async fn get_driver_packs(store: tauri::State<'_, DriverStore>) -> Result<Vec<DriverPack>, String> {
-    Ok(store.0.read().await.clone())
+async fn get_driver_packs(store: tauri::State<'_, DbStore>) -> Result<Vec<DriverPack>, String> {
+    let db = store.0.lock().await;
+    db.list_driver_packs().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn save_driver_pack(store: tauri::State<'_, DriverStore>, pack: DriverPack) -> Result<DriverPack, String> {
-    let mut packs = store.0.write().await;
-    if let Some(existing) = packs.iter_mut().find(|p| p.id == pack.id) {
-        *existing = pack.clone();
-        Ok(pack)
-    } else {
-        let mut new_pack = pack;
-        new_pack.created_at = chrono::Utc::now();
-        packs.push(new_pack.clone());
-        Ok(new_pack)
+async fn save_driver_pack(store: tauri::State<'_, DbStore>, pack: DriverPack) -> Result<DriverPack, String> {
+    let mut p = pack;
+    if p.created_at == chrono::DateTime::default() {
+        p.created_at = chrono::Utc::now();
     }
+    let db = store.0.lock().await;
+    db.upsert_driver_pack(&p).map_err(|e| e.to_string())?;
+    Ok(p)
 }
 
 #[tauri::command]
-async fn delete_driver_pack(store: tauri::State<'_, DriverStore>, id: String) -> Result<(), String> {
+async fn delete_driver_pack(store: tauri::State<'_, DbStore>, id: String) -> Result<(), String> {
     let uuid: Uuid = id.parse().map_err(|e| format!("Invalid UUID: {e}"))?;
-    let mut packs = store.0.write().await;
-    let len_before = packs.len();
-    packs.retain(|p| p.id != uuid);
-    if packs.len() < len_before {
+    let db = store.0.lock().await;
+    let deleted = db.delete_driver_pack(&uuid).map_err(|e| e.to_string())?;
+    if deleted {
         Ok(())
     } else {
         Err("Driver pack not found".into())
@@ -522,6 +512,131 @@ pub struct UnattendRequest {
     pub domain_account: Option<String>,
 }
 
+// --- Deploy Monitoring ---
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeployJobEntry {
+    pub id: String,
+    pub machine_name: String,
+    pub image_id: String,
+    pub status: String,
+    pub progress_pct: u8,
+    pub started_at: String,
+    pub started_by: String,
+    pub message: String,
+}
+
+#[tauri::command]
+async fn get_deploy_jobs(state: tauri::State<'_, AppConfig>) -> Result<Vec<DeployJobEntry>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base = format!("http://{}:{}", state.server_host, state.server_port);
+
+    let auth_resp = client
+        .post(format!("{base}/api/auth"))
+        .json(&serde_json::json!({ "machine_name": state.hostname }))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json::<imaging_common::api::AuthResponse>()
+        .await.map_err(|e| e.to_string())?;
+
+    let jobs: Vec<DeployJobEntry> = client
+        .get(format!("{base}/api/deploy/jobs"))
+        .bearer_auth(&auth_resp.session_token)
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    Ok(jobs)
+}
+
+// --- Audit Log ---
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditEntryJs {
+    pub id: String,
+    pub timestamp: String,
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+    pub detail: Option<String>,
+    pub level: String,
+}
+
+#[tauri::command]
+async fn get_audit_log(state: tauri::State<'_, AppConfig>, search: Option<String>, level: Option<String>) -> Result<Vec<AuditEntryJs>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base = format!("http://{}:{}", state.server_host, state.server_port);
+
+    let auth_resp = client
+        .post(format!("{base}/api/auth"))
+        .json(&serde_json::json!({ "machine_name": state.hostname }))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json::<imaging_common::api::AuthResponse>()
+        .await.map_err(|e| e.to_string())?;
+
+    let mut url = format!("{base}/api/audit?limit=200");
+    if let Some(ref s) = search {
+        url.push_str(&format!("&search={}", urlencoding(s)));
+    }
+    if let Some(ref l) = level {
+        url.push_str(&format!("&level={l}"));
+    }
+
+    let entries: Vec<AuditEntryJs> = client
+        .get(&url)
+        .bearer_auth(&auth_resp.session_token)
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    Ok(entries)
+}
+
+#[tauri::command]
+async fn export_audit_csv(state: tauri::State<'_, AppConfig>) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base = format!("http://{}:{}", state.server_host, state.server_port);
+
+    let auth_resp = client
+        .post(format!("{base}/api/auth"))
+        .json(&serde_json::json!({ "machine_name": state.hostname }))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json::<imaging_common::api::AuthResponse>()
+        .await.map_err(|e| e.to_string())?;
+
+    let csv = client
+        .get(format!("{base}/api/audit/export?limit=1000"))
+        .bearer_auth(&auth_resp.session_token)
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .text().await.map_err(|e| e.to_string())?;
+
+    Ok(csv)
+}
+
+fn urlencoding(s: &str) -> String {
+    s.chars().map(|c| match c {
+        ' ' => "%20".to_string(),
+        '&' => "%26".to_string(),
+        '=' => "%3D".to_string(),
+        _ => c.to_string(),
+    }).collect()
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -540,8 +655,13 @@ pub fn run() {
                 server_port: 7443,
                 hostname,
             });
-            app.manage(SequenceStore(Arc::new(RwLock::new(Vec::new()))));
-            app.manage(DriverStore(Arc::new(RwLock::new(Vec::new()))));
+
+            let app_data = app.path().app_data_dir().expect("app data dir");
+            std::fs::create_dir_all(&app_data).ok();
+            let db_path = app_data.join("deploystation.db");
+            let admin_db = db::AdminDb::open(&db_path)
+                .expect("Failed to open admin database");
+            app.manage(DbStore(Arc::new(Mutex::new(admin_db))));
 
             Ok(())
         })
@@ -563,6 +683,9 @@ pub fn run() {
             save_driver_pack,
             delete_driver_pack,
             preview_unattend,
+            get_deploy_jobs,
+            get_audit_log,
+            export_audit_csv,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
