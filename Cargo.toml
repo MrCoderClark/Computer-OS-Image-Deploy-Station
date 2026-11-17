@@ -10,8 +10,6 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "Proprietary"
-repository = "https://github.com/coderclark/DeployStation"
 
 [workspace.dependencies]
 # Shared across crates
@@ -25,22 +23,6 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# Windows APIs
-windows = { version = "0.61", features = [] }
-
 # Network / RPC
-tonic = "0.13"
-prost = "0.13"
 axum = "0.8"
 tower = "0.5"
-reqwest = { version = "0.12", features = ["json"] }
-
-# Database
-rusqlite = { version = "0.33", features = ["bundled"] }
-
-# XML
-quick-xml = { version = "0.37", features = ["serialize"] }
-
-# Tauri
-tauri = { version = "2", features = [] }
-tauri-build = { version = "2", features = [] }
