@@ -1,5 +1,8 @@
+mod state;
+mod routes;
+
 use anyhow::Result;
-use axum::{routing::get, Router};
+use axum::Router;
 use tracing::info;
 
 #[tokio::main]
@@ -8,9 +11,11 @@ async fn main() -> Result<()> {
         .with_env_filter("imaging_server=debug,tower_http=debug")
         .init();
 
+    let app_state = state::AppState::new_with_samples();
+
     let app = Router::new()
-        .route("/health", get(health))
-        .route("/api/images", get(list_images));
+        .merge(routes::api_routes())
+        .with_state(app_state);
 
     let addr = "0.0.0.0:7443";
     info!("Imaging server listening on {addr}");
@@ -19,12 +24,4 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-async fn health() -> &'static str {
-    "ok"
-}
-
-async fn list_images() -> axum::Json<Vec<imaging_common::types::ImageRecord>> {
-    axum::Json(vec![])
 }
