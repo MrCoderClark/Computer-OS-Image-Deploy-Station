@@ -6,7 +6,7 @@ use axum::{
 };
 use imaging_common::api::*;
 use imaging_common::driver::DriverPack;
-use imaging_common::security::{self, CreateKeyRequest, CreateKeyResponse, EnrollmentKey, KeyListEntry, RevokeKeyRequest};
+use imaging_common::security::{self, CreateKeyRequest, CreateKeyResponse, EnrollmentKey, KeyListEntry};
 use imaging_common::sequence::TaskSequence;
 use imaging_common::types::AuditLevel;
 use uuid::Uuid;

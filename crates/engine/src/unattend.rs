@@ -223,4 +223,115 @@ mod tests {
         assert!(xml.contains("JoinDomain"));
         assert!(xml.contains("MachineObjectOU"));
     }
+
+    #[test]
+    fn default_config_generates_valid_xml() {
+        let config = UnattendConfig::default();
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.starts_with("<?xml"));
+        assert!(xml.contains("<unattend"));
+        assert!(xml.contains("</unattend>"));
+        assert!(xml.contains("specialize"));
+        assert!(xml.contains("oobeSystem"));
+    }
+
+    #[test]
+    fn locale_appears_in_all_fields() {
+        let config = UnattendConfig {
+            locale: "de-DE".into(),
+            ..Default::default()
+        };
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("<InputLocale>de-DE</InputLocale>"));
+        assert!(xml.contains("<SystemLocale>de-DE</SystemLocale>"));
+        assert!(xml.contains("<UILanguage>de-DE</UILanguage>"));
+        assert!(xml.contains("<UserLocale>de-DE</UserLocale>"));
+    }
+
+    #[test]
+    fn timezone_in_oobe_pass() {
+        let config = UnattendConfig {
+            timezone: "Pacific Standard Time".into(),
+            ..Default::default()
+        };
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("<TimeZone>Pacific Standard Time</TimeZone>"));
+    }
+
+    #[test]
+    fn product_key_in_specialize() {
+        let config = UnattendConfig {
+            product_key: Some("XXXXX-XXXXX-XXXXX-XXXXX-XXXXX".into()),
+            ..Default::default()
+        };
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("<ProductKey>XXXXX-XXXXX-XXXXX-XXXXX-XXXXX</ProductKey>"));
+    }
+
+    #[test]
+    fn admin_password_in_oobe() {
+        let config = UnattendConfig {
+            admin_password: Some("P@ssw0rd!".into()),
+            ..Default::default()
+        };
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("<AdministratorPassword>"));
+        assert!(xml.contains("<Value>P@ssw0rd!</Value>"));
+        assert!(xml.contains("<PlainText>true</PlainText>"));
+    }
+
+    #[test]
+    fn no_admin_password_no_user_accounts() {
+        let config = UnattendConfig::default();
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(!xml.contains("<UserAccounts>"));
+        assert!(!xml.contains("<AdministratorPassword>"));
+    }
+
+    #[test]
+    fn oobe_hides_all_screens() {
+        let config = UnattendConfig::default();
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("<HideEULAPage>true</HideEULAPage>"));
+        assert!(xml.contains("<HideLocalAccountScreen>true</HideLocalAccountScreen>"));
+        assert!(xml.contains("<HideOnlineAccountScreens>true</HideOnlineAccountScreens>"));
+        assert!(xml.contains("<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>"));
+        assert!(xml.contains("<ProtectYourPC>3</ProtectYourPC>"));
+    }
+
+    #[test]
+    fn domain_join_without_ou() {
+        let config = UnattendConfig {
+            domain_join: Some(DomainJoinConfig {
+                domain_name: "test.local".into(),
+                ou_path: None,
+                account: "admin".into(),
+                password: "pw".into(),
+            }),
+            ..Default::default()
+        };
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("<JoinDomain>test.local</JoinDomain>"));
+        assert!(!xml.contains("<MachineObjectOU>"));
+        assert!(xml.contains("<Username>admin</Username>"));
+    }
+
+    #[test]
+    fn component_has_amd64_arch() {
+        let config = UnattendConfig::default();
+        let xml = generate_unattend_xml(&config).unwrap();
+        assert!(xml.contains("processorArchitecture=\"amd64\""));
+    }
+
+    #[test]
+    fn no_computer_name_no_shell_setup_in_specialize() {
+        let config = UnattendConfig {
+            computer_name: None,
+            product_key: None,
+            ..Default::default()
+        };
+        let xml = generate_unattend_xml(&config).unwrap();
+        let specialize_section = xml.split("oobeSystem").next().unwrap();
+        assert!(!specialize_section.contains(MS_SHELL_SETUP));
+    }
 }

@@ -102,3 +102,170 @@ fn base64_encode(data: &[u8]) -> String {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_key_not_empty() {
+        let key = generate_key();
+        assert!(!key.is_empty());
+    }
+
+    #[test]
+    fn generate_key_is_base64() {
+        let key = generate_key();
+        assert!(key.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
+    }
+
+    #[test]
+    fn generate_key_unique() {
+        let a = generate_key();
+        let b = generate_key();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn generate_key_length() {
+        let key = generate_key();
+        assert_eq!(key.len(), 32);
+    }
+
+    #[test]
+    fn hash_key_deterministic() {
+        let hash1 = hash_key("test-key-abc");
+        let hash2 = hash_key("test-key-abc");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn hash_key_different_inputs() {
+        let hash1 = hash_key("key-one");
+        let hash2 = hash_key("key-two");
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn hash_key_has_prefix() {
+        let hash = hash_key("anything");
+        assert!(hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn enrollment_key_valid_when_active() {
+        let key = EnrollmentKey {
+            id: Uuid::new_v4(),
+            label: "test".into(),
+            key_hash: hash_key("abc"),
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            revoked: false,
+            revoked_at: None,
+            created_by: "admin".into(),
+        };
+        assert!(key.is_valid());
+        assert!(!key.is_expired());
+        assert!(!key.revoked);
+    }
+
+    #[test]
+    fn enrollment_key_expired() {
+        let key = EnrollmentKey {
+            id: Uuid::new_v4(),
+            label: "expired".into(),
+            key_hash: hash_key("abc"),
+            created_at: chrono::Utc::now() - chrono::Duration::hours(2),
+            expires_at: chrono::Utc::now() - chrono::Duration::hours(1),
+            revoked: false,
+            revoked_at: None,
+            created_by: "admin".into(),
+        };
+        assert!(key.is_expired());
+        assert!(!key.is_valid());
+    }
+
+    #[test]
+    fn enrollment_key_revoked() {
+        let key = EnrollmentKey {
+            id: Uuid::new_v4(),
+            label: "revoked".into(),
+            key_hash: hash_key("abc"),
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            revoked: true,
+            revoked_at: Some(chrono::Utc::now()),
+            created_by: "admin".into(),
+        };
+        assert!(!key.is_valid());
+        assert!(!key.is_expired());
+        assert!(key.revoked);
+    }
+
+    #[test]
+    fn days_until_expiry_positive() {
+        let key = EnrollmentKey {
+            id: Uuid::new_v4(),
+            label: "test".into(),
+            key_hash: hash_key("abc"),
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(30),
+            revoked: false,
+            revoked_at: None,
+            created_by: "admin".into(),
+        };
+        assert!(key.days_until_expiry() >= 29);
+        assert!(key.days_until_expiry() <= 30);
+    }
+
+    #[test]
+    fn days_until_expiry_negative_when_expired() {
+        let key = EnrollmentKey {
+            id: Uuid::new_v4(),
+            label: "expired".into(),
+            key_hash: hash_key("abc"),
+            created_at: chrono::Utc::now() - chrono::Duration::days(10),
+            expires_at: chrono::Utc::now() - chrono::Duration::days(5),
+            revoked: false,
+            revoked_at: None,
+            created_by: "admin".into(),
+        };
+        assert!(key.days_until_expiry() < 0);
+    }
+
+    #[test]
+    fn create_key_request_serialization() {
+        let req = CreateKeyRequest {
+            label: "Building A".into(),
+            expires_in_days: 90,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: CreateKeyRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.label, "Building A");
+        assert_eq!(parsed.expires_in_days, 90);
+    }
+
+    #[test]
+    fn key_list_entry_serialization() {
+        let entry = KeyListEntry {
+            id: Uuid::new_v4(),
+            label: "test".into(),
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(90),
+            revoked: false,
+            days_remaining: 90,
+            created_by: "admin".into(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: KeyListEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.label, "test");
+        assert_eq!(parsed.days_remaining, 90);
+    }
+
+    #[test]
+    fn base64_encode_known_values() {
+        assert_eq!(base64_encode(b"Hello"), "SGVsbG8=");
+        assert_eq!(base64_encode(b"AB"), "QUI=");
+        assert_eq!(base64_encode(b"ABC"), "QUJD");
+    }
+}
