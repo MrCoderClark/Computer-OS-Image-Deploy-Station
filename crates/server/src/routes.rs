@@ -6,6 +6,7 @@ use axum::{
 };
 use imaging_common::api::*;
 use imaging_common::driver::DriverPack;
+use imaging_common::security::{self, CreateKeyRequest, CreateKeyResponse, EnrollmentKey, KeyListEntry, RevokeKeyRequest};
 use imaging_common::sequence::TaskSequence;
 use imaging_common::types::AuditLevel;
 use uuid::Uuid;
@@ -28,6 +29,8 @@ pub fn api_routes() -> Router<AppState> {
         .route("/api/drivers/{id}", delete(delete_driver_pack))
         .route("/api/audit", get(query_audit_log))
         .route("/api/audit/export", get(export_audit_csv))
+        .route("/api/keys", get(list_keys).post(create_key))
+        .route("/api/keys/{id}/revoke", post(revoke_key))
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -40,13 +43,43 @@ async fn health() -> Json<HealthResponse> {
 async fn authenticate(
     State(state): State<AppState>,
     Json(req): Json<AuthRequest>,
-) -> Json<AuthResponse> {
+) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     tracing::info!("Auth request from machine: {}", req.machine_name);
+
     let db = state.db.lock().await;
-    db::audit(&db, &req.machine_name, "auth", &req.machine_name, None, AuditLevel::Info);
+
+    if let Some(raw_key) = &req.enrollment_key {
+        let hash = security::hash_key(raw_key);
+        match db.validate_enrollment_key(&hash) {
+            Ok(Some(key)) if key.is_valid() => {
+                db::audit(&db, &req.machine_name, "auth", &req.machine_name, Some(&format!("key={}", key.label)), AuditLevel::Info);
+            }
+            Ok(Some(key)) => {
+                let reason = if key.revoked { "revoked" } else { "expired" };
+                db::audit(&db, &req.machine_name, "auth_rejected", &req.machine_name, Some(&format!("key={} ({})", key.label, reason)), AuditLevel::Warning);
+                return Err((StatusCode::UNAUTHORIZED, format!("Enrollment key is {reason}")));
+            }
+            Ok(None) => {
+                db::audit(&db, &req.machine_name, "auth_rejected", &req.machine_name, Some("unknown key"), AuditLevel::Warning);
+                return Err((StatusCode::UNAUTHORIZED, "Invalid enrollment key".into()));
+            }
+            Err(e) => {
+                tracing::error!("Key lookup failed: {e}");
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Key validation error".into()));
+            }
+        }
+    } else {
+        let has_keys = db.list_enrollment_keys().map(|k| !k.is_empty()).unwrap_or(false);
+        if has_keys {
+            db::audit(&db, &req.machine_name, "auth_rejected", &req.machine_name, Some("no key provided"), AuditLevel::Warning);
+            return Err((StatusCode::UNAUTHORIZED, "Enrollment key required".into()));
+        }
+        db::audit(&db, &req.machine_name, "auth", &req.machine_name, Some("no keys configured"), AuditLevel::Info);
+    }
+
     drop(db);
     let response = state.create_session(&req.machine_name).await;
-    Json(response)
+    Ok(Json(response))
 }
 
 async fn list_images(
@@ -253,6 +286,77 @@ async fn delete_driver_pack(
     if deleted {
         db::audit(&db, "admin", "delete_driver_pack", &id.to_string(), None, AuditLevel::Warning);
         Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+// --- Enrollment Keys ---
+
+async fn create_key(
+    State(state): State<AppState>,
+    Json(req): Json<CreateKeyRequest>,
+) -> Result<Json<CreateKeyResponse>, (StatusCode, String)> {
+    let plaintext = security::generate_key();
+    let hash = security::hash_key(&plaintext);
+    let now = chrono::Utc::now();
+    let expires_at = now + chrono::Duration::days(req.expires_in_days as i64);
+
+    let key = EnrollmentKey {
+        id: Uuid::new_v4(),
+        label: req.label.clone(),
+        key_hash: hash,
+        created_at: now,
+        expires_at,
+        revoked: false,
+        revoked_at: None,
+        created_by: "admin".into(),
+    };
+
+    let db = state.db.lock().await;
+    db.insert_enrollment_key(&key)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db::audit(&db, "admin", "create_key", &key.label, Some(&format!("expires={}", expires_at.to_rfc3339())), AuditLevel::Info);
+
+    Ok(Json(CreateKeyResponse {
+        id: key.id,
+        label: key.label,
+        plaintext_key: plaintext,
+        expires_at,
+    }))
+}
+
+async fn list_keys(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<KeyListEntry>>, StatusCode> {
+    let db = state.db.lock().await;
+    let keys = db.list_enrollment_keys().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let entries: Vec<KeyListEntry> = keys
+        .iter()
+        .map(|k| KeyListEntry {
+            id: k.id,
+            label: k.label.clone(),
+            created_at: k.created_at,
+            expires_at: k.expires_at,
+            revoked: k.revoked,
+            days_remaining: k.days_until_expiry(),
+            created_by: k.created_by.clone(),
+        })
+        .collect();
+
+    Ok(Json(entries))
+}
+
+async fn revoke_key(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let db = state.db.lock().await;
+    let revoked = db.revoke_enrollment_key(&id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if revoked {
+        db::audit(&db, "admin", "revoke_key", &id.to_string(), None, AuditLevel::Warning);
+        Ok(StatusCode::OK)
     } else {
         Err(StatusCode::NOT_FOUND)
     }

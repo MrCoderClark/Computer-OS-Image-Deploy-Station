@@ -1,6 +1,6 @@
 # Windows Imaging Suite — Progress Tracker
 
-> Updated: 2026-11-17
+> Updated: 2026-11-18
 
 ## Build Order
 
@@ -177,14 +177,18 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 11: Security & Signing
 **Branch:** `phase/11-security-signing`
-**Status:** Not started
+**Status:** Complete
 
-- [ ] Secure Boot investigation and decision
-- [ ] EV code-signing cert acquisition (if applicable)
-- [ ] Signed bootx64.efi for WinPE media
-- [ ] Pre-shared enrollment key with hard expiry
-- [ ] Key revocation mechanism
-- [ ] Credential rotation workflow in admin app
+- [x] Pre-shared enrollment key system (common types, server CRUD, hash-based lookup)
+- [x] Enrollment key validation in server auth flow (reject expired/revoked, require key when any exist)
+- [x] Key management API endpoints (POST /api/keys, GET /api/keys, POST /api/keys/{id}/revoke)
+- [x] Agent sends enrollment key from USB config during authentication
+- [x] Admin UI: enrollment key management (create with expiry, revoke, status badges)
+- [x] Admin UI: credential rotation alert on dashboard (keys expiring within 14 days)
+- [x] Build Media wizard includes enrollment key field in config step
+- [x] SuiteConfig updated with enrollment_key field + offline mode validation
+- [x] Secure Boot investigation doc (docs/secure-boot-signing.md)
+- [x] Code-signing scaffold script (tools/sign-agent.ps1)
 
 ---
 
@@ -206,7 +210,7 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 | # | Question | Status |
 |---|---|---|
-| 1 | Signed or unsigned boot media? | **Open** — decides Phase 11 scope |
+| 1 | Signed or unsigned boot media? | **Resolved** — WinPE boot chain is MS-signed; agent EXE signing is optional (see docs/secure-boot-signing.md) |
 | 2 | Offline capture in scope for v1? | **Open** — affects Phase 5 |
 | 3 | Max capture size for shared drive? | **Open** — sizing/retention |
 | 4 | PXE / WDS network boot in scope? | **Open** — post-USB stretch goal |
