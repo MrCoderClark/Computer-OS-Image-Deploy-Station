@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use imaging_common::config::OsFamily;
 use imaging_common::driver::DriverPack;
+use imaging_common::security::EnrollmentKey;
 use imaging_common::sequence::TaskSequence;
 use imaging_common::types::{AuditEntry, AuditLevel, DeployJob, ImageRecord};
 
@@ -52,6 +53,17 @@ CREATE TABLE IF NOT EXISTS driver_packs (
     id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS enrollment_keys (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    revoked_at TEXT,
+    created_by TEXT NOT NULL
 );
 "#;
 
@@ -297,6 +309,113 @@ impl Database {
 
     pub fn delete_driver_pack(&self, id: &Uuid) -> Result<bool> {
         let count = self.conn.execute("DELETE FROM driver_packs WHERE id = ?1", params![id.to_string()])?;
+        Ok(count > 0)
+    }
+
+    // --- Enrollment Keys ---
+
+    pub fn insert_enrollment_key(&self, key: &EnrollmentKey) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO enrollment_keys (id, label, key_hash, created_at, expires_at, revoked, revoked_at, created_by) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                key.id.to_string(),
+                key.label,
+                key.key_hash,
+                key.created_at.to_rfc3339(),
+                key.expires_at.to_rfc3339(),
+                key.revoked as i32,
+                key.revoked_at.map(|d| d.to_rfc3339()),
+                key.created_by,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_enrollment_keys(&self) -> Result<Vec<EnrollmentKey>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, label, key_hash, created_at, expires_at, revoked, revoked_at, created_by FROM enrollment_keys ORDER BY created_at DESC"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let id_str: String = row.get(0)?;
+            let created_str: String = row.get(3)?;
+            let expires_str: String = row.get(4)?;
+            let revoked_int: i32 = row.get(5)?;
+            let revoked_at_str: Option<String> = row.get(6)?;
+            Ok(EnrollmentKey {
+                id: id_str.parse().unwrap_or_default(),
+                label: row.get(1)?,
+                key_hash: row.get(2)?,
+                created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_default(),
+                expires_at: chrono::DateTime::parse_from_rfc3339(&expires_str)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_default(),
+                revoked: revoked_int != 0,
+                revoked_at: revoked_at_str.and_then(|s| {
+                    chrono::DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .ok()
+                }),
+                created_by: row.get(7)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().context("read enrollment keys")
+    }
+
+    pub fn validate_enrollment_key(&self, key_hash: &str) -> Result<Option<EnrollmentKey>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, label, key_hash, created_at, expires_at, revoked, revoked_at, created_by FROM enrollment_keys WHERE key_hash = ?1"
+        )?;
+
+        let mut rows = stmt.query_map(params![key_hash], |row| {
+            let id_str: String = row.get(0)?;
+            let created_str: String = row.get(3)?;
+            let expires_str: String = row.get(4)?;
+            let revoked_int: i32 = row.get(5)?;
+            let revoked_at_str: Option<String> = row.get(6)?;
+            Ok(EnrollmentKey {
+                id: id_str.parse().unwrap_or_default(),
+                label: row.get(1)?,
+                key_hash: row.get(2)?,
+                created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_default(),
+                expires_at: chrono::DateTime::parse_from_rfc3339(&expires_str)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_default(),
+                revoked: revoked_int != 0,
+                revoked_at: revoked_at_str.and_then(|s| {
+                    chrono::DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .ok()
+                }),
+                created_by: row.get(7)?,
+            })
+        })?;
+
+        match rows.next() {
+            Some(Ok(key)) => Ok(Some(key)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn revoke_enrollment_key(&self, id: &Uuid) -> Result<bool> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let count = self.conn.execute(
+            "UPDATE enrollment_keys SET revoked = 1, revoked_at = ?2 WHERE id = ?1 AND revoked = 0",
+            params![id.to_string(), now],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn delete_enrollment_key(&self, id: &Uuid) -> Result<bool> {
+        let count = self.conn.execute(
+            "DELETE FROM enrollment_keys WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         Ok(count > 0)
     }
 }

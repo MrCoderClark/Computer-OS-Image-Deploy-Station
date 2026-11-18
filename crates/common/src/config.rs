@@ -12,6 +12,8 @@ pub struct SuiteConfig {
     pub capture_target: Option<CaptureTarget>,
     #[serde(default)]
     pub image: Option<ImageMeta>,
+    #[serde(default)]
+    pub enrollment_key: Option<String>,
     pub built_by: String,
     pub built_at: chrono::DateTime<chrono::Utc>,
 }
@@ -52,6 +54,10 @@ impl SuiteConfig {
             if server.discovery == DiscoveryMethod::Fixed && server.host.is_none() {
                 errors.push("Fixed discovery requires 'host' in server config".into());
             }
+        }
+
+        if self.mode == OperatingMode::Offline && self.enrollment_key.is_none() {
+            errors.push("Offline mode requires an 'enrollment_key' for authentication".into());
         }
 
         if self.built_by.is_empty() {

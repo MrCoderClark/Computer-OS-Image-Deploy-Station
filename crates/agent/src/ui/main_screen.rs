@@ -95,10 +95,6 @@ fn image_panel(ui: &mut egui::Ui, app: &AgentApp) {
                             ));
                             ui.end_row();
 
-                            ui.add_space(6.0);
-                            ui.add_space(6.0);
-                            ui.end_row();
-
                             ui.label(theme::label("SIZE"));
                             ui.label(theme::label("HASH"));
                             ui.end_row();
@@ -164,10 +160,6 @@ fn server_image_panel(ui: &mut egui::Ui, app: &AgentApp) {
             ui.label(theme::body(
                 img.build_date.as_deref().unwrap_or("Unknown"),
             ));
-            ui.end_row();
-
-            ui.add_space(6.0);
-            ui.add_space(6.0);
             ui.end_row();
 
             ui.label(theme::label("SIZE"));

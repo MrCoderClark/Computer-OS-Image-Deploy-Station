@@ -2,6 +2,7 @@ mod db;
 
 use imaging_common::config::*;
 use imaging_common::driver::DriverPack;
+use imaging_common::security::{CreateKeyRequest, CreateKeyResponse, KeyListEntry};
 use imaging_common::sequence::{TaskSequence, TaskStep, StepType, StepConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,6 +20,7 @@ pub struct ConfigBuildRequest {
     pub image_os_family: Option<String>,
     pub capture_unc_path: Option<String>,
     pub capture_account: Option<String>,
+    pub enrollment_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -168,6 +170,7 @@ fn build_config(request: ConfigBuildRequest) -> Result<String, String> {
         server,
         capture_target,
         image,
+        enrollment_key: request.enrollment_key,
         built_by: hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "admin".into()),
@@ -212,6 +215,7 @@ pub struct MediaBuildRequest {
     pub discovery: Option<String>,
     pub capture_unc_path: Option<String>,
     pub capture_account: Option<String>,
+    pub enrollment_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +293,7 @@ async fn build_media(request: MediaBuildRequest) -> Result<String, String> {
         image_os_family: request.image_os_family,
         capture_unc_path: request.capture_unc_path,
         capture_account: request.capture_account,
+        enrollment_key: request.enrollment_key,
     })?;
 
     let drive = request.drive_letter.clone();
@@ -459,7 +464,7 @@ async fn get_driver_packs(store: tauri::State<'_, DbStore>) -> Result<Vec<Driver
 #[tauri::command]
 async fn save_driver_pack(store: tauri::State<'_, DbStore>, pack: DriverPack) -> Result<DriverPack, String> {
     let mut p = pack;
-    if p.created_at == chrono::DateTime::default() {
+    if p.created_at == chrono::DateTime::<chrono::Utc>::default() {
         p.created_at = chrono::Utc::now();
     }
     let db = store.0.lock().await;
@@ -628,6 +633,62 @@ async fn export_audit_csv(state: tauri::State<'_, AppConfig>) -> Result<String, 
     Ok(csv)
 }
 
+// --- Enrollment Keys ---
+
+#[tauri::command]
+async fn get_enrollment_keys(state: tauri::State<'_, AppConfig>) -> Result<Vec<KeyListEntry>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base = format!("http://{}:{}", state.server_host, state.server_port);
+
+    let keys: Vec<KeyListEntry> = client
+        .get(format!("{base}/api/keys"))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    Ok(keys)
+}
+
+#[tauri::command]
+async fn create_enrollment_key(state: tauri::State<'_, AppConfig>, label: String, expires_in_days: u32) -> Result<CreateKeyResponse, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base = format!("http://{}:{}", state.server_host, state.server_port);
+
+    let resp: CreateKeyResponse = client
+        .post(format!("{base}/api/keys"))
+        .json(&CreateKeyRequest { label, expires_in_days })
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+
+    Ok(resp)
+}
+
+#[tauri::command]
+async fn revoke_enrollment_key(state: tauri::State<'_, AppConfig>, id: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base = format!("http://{}:{}", state.server_host, state.server_port);
+
+    client
+        .post(format!("{base}/api/keys/{id}/revoke"))
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 fn urlencoding(s: &str) -> String {
     s.chars().map(|c| match c {
         ' ' => "%20".to_string(),
@@ -686,6 +747,9 @@ pub fn run() {
             get_deploy_jobs,
             get_audit_log,
             export_audit_csv,
+            get_enrollment_keys,
+            create_enrollment_key,
+            revoke_enrollment_key,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

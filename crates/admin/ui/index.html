@@ -919,6 +919,10 @@
           <label class="form-label">Service Account</label>
           <input class="form-input" id="wiz-account" placeholder="DOMAIN\\svc-imaging">
         </div>
+        <div class="form-row">
+          <label class="form-label">Enrollment Key</label>
+          <input class="form-input" id="wiz-enrollment-key" placeholder="Paste key (required if server has keys configured)">
+        </div>
       </div>
 
       <!-- Step 5: Build -->
@@ -1002,6 +1006,34 @@
         <div class="form-row">
           <label class="form-label">Service Account</label>
           <input class="form-input" id="settings-account" placeholder="DOMAIN\\svc-imaging">
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-title" style="display:flex;justify-content:space-between;align-items:center">
+          Enrollment Keys
+          <button class="btn btn-primary" id="create-key-btn" style="font-size:12px;padding:4px 12px">+ Create Key</button>
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Pre-shared keys that agents use to authenticate with the server. Keys are shown once at creation — copy and store securely.</p>
+        <div id="key-create-form" style="display:none;margin-bottom:12px;padding:12px;background:var(--bg);border-radius:6px">
+          <div class="form-row">
+            <label class="form-label">Label</label>
+            <input class="form-input" id="key-label" placeholder="e.g. Building A deployment">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Expires in (days)</label>
+            <input class="form-input" id="key-expires-days" type="number" value="90" min="1" max="365">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-primary" id="key-save-btn">Generate Key</button>
+            <button class="btn" id="key-cancel-btn">Cancel</button>
+          </div>
+        </div>
+        <div id="key-created-banner" style="display:none;margin-bottom:12px;padding:12px;background:#1a3a1a;border:1px solid var(--success);border-radius:6px;font-size:13px">
+          <div style="color:var(--success);font-weight:600;margin-bottom:4px">Key created — copy this now, it won't be shown again:</div>
+          <code id="key-created-value" style="display:block;padding:8px;background:var(--surface);border-radius:4px;font-size:12px;word-break:break-all;user-select:all"></code>
+        </div>
+        <div id="keys-table-wrap">
+          <div class="empty-state" style="padding:16px;font-size:13px">No enrollment keys configured. Agents can connect without authentication.</div>
         </div>
       </div>
       <div class="settings-section">
@@ -1558,6 +1590,98 @@
       }
     }
 
+    // === Enrollment Keys ===
+    let allEnrollmentKeys = [];
+
+    document.getElementById('create-key-btn').addEventListener('click', () => {
+      document.getElementById('key-create-form').style.display = '';
+      document.getElementById('key-created-banner').style.display = 'none';
+      document.getElementById('key-label').value = '';
+      document.getElementById('key-expires-days').value = '90';
+    });
+
+    document.getElementById('key-cancel-btn').addEventListener('click', () => {
+      document.getElementById('key-create-form').style.display = 'none';
+    });
+
+    document.getElementById('key-save-btn').addEventListener('click', async () => {
+      const label = document.getElementById('key-label').value.trim();
+      const days = parseInt(document.getElementById('key-expires-days').value) || 90;
+      if (!label) { showToast('Label is required', 'error'); return; }
+
+      try {
+        const resp = await invoke('create_enrollment_key', { label, expiresInDays: days });
+        document.getElementById('key-create-form').style.display = 'none';
+        document.getElementById('key-created-banner').style.display = '';
+        document.getElementById('key-created-value').textContent = resp.plaintext_key;
+        await loadEnrollmentKeys();
+        showToast('Enrollment key created', 'success');
+      } catch (e) { showToast('Failed to create key: ' + e, 'error'); }
+    });
+
+    async function loadEnrollmentKeys() {
+      try {
+        allEnrollmentKeys = await invoke('get_enrollment_keys');
+        renderKeysTable();
+      } catch (e) {
+        console.error('load enrollment keys', e);
+        document.getElementById('keys-table-wrap').innerHTML =
+          '<div class="empty-state" style="padding:16px;font-size:13px">Failed to load keys. Is the server running?</div>';
+      }
+    }
+
+    function renderKeysTable() {
+      const wrap = document.getElementById('keys-table-wrap');
+      if (allEnrollmentKeys.length === 0) {
+        wrap.innerHTML = '<div class="empty-state" style="padding:16px;font-size:13px">No enrollment keys configured. Agents can connect without authentication.</div>';
+        // Show rotation alert if no keys
+        document.getElementById('alert-rotation').style.display = 'none';
+        return;
+      }
+
+      const expiring = allEnrollmentKeys.filter(k => !k.revoked && k.days_remaining <= 14 && k.days_remaining > 0);
+      const rotationAlert = document.getElementById('alert-rotation');
+      if (expiring.length > 0) {
+        rotationAlert.style.display = '';
+        rotationAlert.querySelector('span:last-child').textContent =
+          `${expiring.length} enrollment key${expiring.length > 1 ? 's' : ''} expiring within 14 days. Create replacement keys and rebuild affected media.`;
+      } else {
+        rotationAlert.style.display = 'none';
+      }
+
+      wrap.innerHTML = `<table class="data-table"><thead><tr>
+        <th>Label</th><th>Created</th><th>Expires</th><th>Status</th><th>Actions</th>
+      </tr></thead><tbody>${allEnrollmentKeys.map(k => {
+        const created = new Date(k.created_at).toLocaleDateString();
+        const expires = new Date(k.expires_at).toLocaleDateString();
+        let status;
+        if (k.revoked) {
+          status = '<span class="status-badge status-failed">Revoked</span>';
+        } else if (k.days_remaining <= 0) {
+          status = '<span class="status-badge status-failed">Expired</span>';
+        } else if (k.days_remaining <= 14) {
+          status = '<span class="status-badge status-active">Expiring (' + k.days_remaining + 'd)</span>';
+        } else {
+          status = '<span class="status-badge status-complete">Active (' + k.days_remaining + 'd)</span>';
+        }
+        const actions = k.revoked
+          ? '<span style="color:var(--text-muted);font-size:12px">—</span>'
+          : '<button class="btn" style="font-size:11px;padding:2px 8px;color:var(--error)" data-revoke-id="' + k.id + '">Revoke</button>';
+        return '<tr><td>' + k.label + '</td><td style="font-size:12px">' + created + '</td><td style="font-size:12px">' + expires + '</td><td>' + status + '</td><td>' + actions + '</td></tr>';
+      }).join('')}</tbody></table>`;
+
+      wrap.querySelectorAll('[data-revoke-id]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!await showConfirm('Revoke this enrollment key? Agents using it will no longer be able to authenticate.')) return;
+          try {
+            await invoke('revoke_enrollment_key', { id: btn.dataset.revokeId });
+            await loadEnrollmentKeys();
+            showToast('Key revoked', 'success');
+          } catch (e) { showToast('Failed to revoke: ' + e, 'error'); }
+        });
+      });
+    }
+
     // Load data when navigating to these pages
     const origNavHandler = document.querySelectorAll('.nav-item');
     origNavHandler.forEach(item => {
@@ -1567,6 +1691,7 @@
         if (page === 'drivers') loadDriverPacks();
         if (page === 'deployments') loadDeployJobs();
         if (page === 'audit') loadAuditLog();
+        if (page === 'settings') loadEnrollmentKeys();
       });
     });
 
@@ -1767,6 +1892,7 @@
             discovery: 'fixed',
             capture_unc_path: document.getElementById('wiz-unc').value || null,
             capture_account: document.getElementById('wiz-account').value || null,
+            enrollment_key: document.getElementById('wiz-enrollment-key').value || null,
           }
         });
 

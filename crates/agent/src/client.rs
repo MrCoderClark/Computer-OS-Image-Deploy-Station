@@ -34,10 +34,10 @@ impl ServerClient {
         Ok(resp)
     }
 
-    pub async fn authenticate(&mut self, machine_name: &str) -> Result<AuthResponse> {
+    pub async fn authenticate(&mut self, machine_name: &str, enrollment_key: Option<&str>) -> Result<AuthResponse> {
         let req = AuthRequest {
             machine_name: machine_name.into(),
-            enrollment_key: None,
+            enrollment_key: enrollment_key.map(|s| s.to_string()),
         };
 
         let resp = self

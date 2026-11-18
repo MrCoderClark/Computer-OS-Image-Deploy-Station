@@ -113,10 +113,11 @@ impl AgentApp {
 
         if connection == ConnectionStatus::Connecting {
             let server_config = config.as_ref().and_then(|c| c.server.clone());
+            let enrollment_key = config.as_ref().and_then(|c| c.enrollment_key.clone());
             let name = machine_name.clone();
             let connect_tx = net_tx.clone();
             rt.spawn(async move {
-                connect_to_server(server_config, &name, connect_tx).await;
+                connect_to_server(server_config, enrollment_key.as_deref(), &name, connect_tx).await;
             });
         }
 
@@ -361,6 +362,7 @@ impl eframe::App for AgentApp {
 
 async fn connect_to_server(
     server_config: Option<imaging_common::config::ServerConfig>,
+    enrollment_key: Option<&str>,
     machine_name: &str,
     tx: mpsc::UnboundedSender<NetworkEvent>,
 ) {
@@ -388,7 +390,7 @@ async fn connect_to_server(
         }
     }
 
-    match client.authenticate(machine_name).await {
+    match client.authenticate(machine_name, enrollment_key).await {
         Ok(resp) => {
             tracing::info!("Authenticated, token expires at {}", resp.expires_at);
             let _ = tx.send(NetworkEvent::Connected);
