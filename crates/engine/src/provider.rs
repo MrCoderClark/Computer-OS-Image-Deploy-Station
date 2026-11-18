@@ -100,3 +100,82 @@ pub fn create_provider(config: &SuiteConfig) -> Result<Box<dyn ImageProvider>> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use imaging_common::config::*;
+
+    fn make_config(mode: OperatingMode, wim_path: Option<&str>) -> SuiteConfig {
+        let image = match mode {
+            OperatingMode::Online => None,
+            _ => Some(ImageMeta {
+                name: "test".into(),
+                os_family: OsFamily::Win11,
+                captured_from: None,
+                build_date: None,
+                size_bytes: None,
+                sha256: None,
+                wim_path: wim_path.map(|s| s.to_string()),
+            }),
+        };
+        let server = match mode {
+            OperatingMode::Offline => None,
+            _ => Some(ServerConfig {
+                discovery: DiscoveryMethod::Fixed,
+                host: Some("10.0.0.1".into()),
+                port: 7443,
+            }),
+        };
+        SuiteConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            mode,
+            server,
+            capture_target: None,
+            image,
+            enrollment_key: None,
+            built_by: "test".into(),
+            built_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn offline_uses_local_provider() {
+        let cfg = make_config(OperatingMode::Offline, None);
+        let provider = create_provider(&cfg).unwrap();
+        assert_eq!(provider.wim_path(), Path::new(r"X:\imaging\deploy.wim"));
+        assert_eq!(provider.image_index(), 1);
+        assert!(provider.description().contains("Local"));
+    }
+
+    #[test]
+    fn offline_custom_wim_path() {
+        let cfg = make_config(OperatingMode::Offline, Some(r"D:\images\custom.wim"));
+        let provider = create_provider(&cfg).unwrap();
+        assert_eq!(provider.wim_path(), Path::new(r"D:\images\custom.wim"));
+    }
+
+    #[test]
+    fn online_uses_network_provider() {
+        let cfg = make_config(OperatingMode::Online, None);
+        let provider = create_provider(&cfg).unwrap();
+        assert!(provider.description().contains("Network"));
+        assert_eq!(provider.image_index(), 1);
+    }
+
+    #[test]
+    fn network_provider_manual() {
+        let p = NetworkProvider::new(PathBuf::from(r"C:\temp\download.wim"), 2);
+        assert_eq!(p.wim_path(), Path::new(r"C:\temp\download.wim"));
+        assert_eq!(p.image_index(), 2);
+        assert!(p.description().contains("Network"));
+    }
+
+    #[test]
+    fn local_provider_description() {
+        let cfg = make_config(OperatingMode::Offline, Some(r"X:\test.wim"));
+        let p = LocalDiskProvider::from_config(&cfg).unwrap();
+        assert!(p.description().starts_with("Local:"));
+        assert!(p.description().contains("test.wim"));
+    }
+}

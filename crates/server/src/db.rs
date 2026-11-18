@@ -461,3 +461,237 @@ fn parse_audit_level(s: &str) -> AuditLevel {
         _ => AuditLevel::Info,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use imaging_common::security;
+    use imaging_common::types::DeployStatus;
+
+    fn test_db() -> Database {
+        Database::open_in_memory().unwrap()
+    }
+
+    fn sample_image() -> ImageRecord {
+        ImageRecord {
+            id: Uuid::new_v4(),
+            name: "Win11-Test".into(),
+            os_family: OsFamily::Win11,
+            captured_from: Some("TestPC".into()),
+            build_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            size_bytes: 1_000_000,
+            sha256: "abc123".into(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    fn sample_key(label: &str, plaintext: &str) -> EnrollmentKey {
+        EnrollmentKey {
+            id: Uuid::new_v4(),
+            label: label.into(),
+            key_hash: security::hash_key(plaintext),
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(90),
+            revoked: false,
+            revoked_at: None,
+            created_by: "test".into(),
+        }
+    }
+
+    // --- Image CRUD ---
+
+    #[test]
+    fn insert_and_list_images() {
+        let db = test_db();
+        let img = sample_image();
+        db.insert_image(&img).unwrap();
+
+        let images = db.list_images().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].name, "Win11-Test");
+    }
+
+    #[test]
+    fn list_images_empty() {
+        let db = test_db();
+        let images = db.list_images().unwrap();
+        assert!(images.is_empty());
+    }
+
+    // --- Deploy Jobs ---
+
+    #[test]
+    fn upsert_and_list_deploy_jobs() {
+        let db = test_db();
+        let job = DeployJob {
+            id: Uuid::new_v4(),
+            machine_name: "PC-001".into(),
+            image_id: Uuid::new_v4(),
+            status: DeployStatus::Applying,
+            progress_pct: 50,
+            started_at: chrono::Utc::now(),
+            started_by: "agent".into(),
+        };
+        db.upsert_deploy_job(&job, "Applying image").unwrap();
+
+        let jobs = db.list_deploy_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].machine_name, "PC-001");
+        assert_eq!(jobs[0].progress_pct, 50);
+    }
+
+    #[test]
+    fn upsert_deploy_job_updates() {
+        let db = test_db();
+        let id = Uuid::new_v4();
+        let job = DeployJob {
+            id,
+            machine_name: "PC-002".into(),
+            image_id: Uuid::new_v4(),
+            status: DeployStatus::Pending,
+            progress_pct: 0,
+            started_at: chrono::Utc::now(),
+            started_by: "agent".into(),
+        };
+        db.upsert_deploy_job(&job, "Starting").unwrap();
+
+        let updated = DeployJob { progress_pct: 75, status: DeployStatus::Applying, ..job };
+        db.upsert_deploy_job(&updated, "75% done").unwrap();
+
+        let jobs = db.list_deploy_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].progress_pct, 75);
+    }
+
+    // --- Audit Log ---
+
+    #[test]
+    fn insert_and_query_audit() {
+        let db = test_db();
+        audit(&db, "admin", "test_action", "target1", Some("detail"), AuditLevel::Info);
+
+        let entries = db.query_audit(None, None, 100).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].actor, "admin");
+        assert_eq!(entries[0].action, "test_action");
+    }
+
+    #[test]
+    fn query_audit_by_search() {
+        let db = test_db();
+        audit(&db, "admin", "deploy", "PC-001", None, AuditLevel::Info);
+        audit(&db, "agent", "auth", "PC-002", None, AuditLevel::Info);
+
+        let entries = db.query_audit(Some("deploy"), None, 100).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "deploy");
+    }
+
+    #[test]
+    fn query_audit_by_level() {
+        let db = test_db();
+        audit(&db, "admin", "action1", "t1", None, AuditLevel::Info);
+        audit(&db, "admin", "action2", "t2", None, AuditLevel::Warning);
+
+        let entries = db.query_audit(None, Some("warning"), 100).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "action2");
+    }
+
+    // --- Enrollment Keys ---
+
+    #[test]
+    fn insert_and_list_enrollment_keys() {
+        let db = test_db();
+        let key = sample_key("Test Key", "secret123");
+        db.insert_enrollment_key(&key).unwrap();
+
+        let keys = db.list_enrollment_keys().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].label, "Test Key");
+        assert!(!keys[0].revoked);
+    }
+
+    #[test]
+    fn validate_enrollment_key_by_hash() {
+        let db = test_db();
+        let plaintext = "my-secret-key";
+        let key = sample_key("Lookup Test", plaintext);
+        db.insert_enrollment_key(&key).unwrap();
+
+        let hash = security::hash_key(plaintext);
+        let found = db.validate_enrollment_key(&hash).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().label, "Lookup Test");
+    }
+
+    #[test]
+    fn validate_enrollment_key_unknown_hash() {
+        let db = test_db();
+        let key = sample_key("Test", "real-key");
+        db.insert_enrollment_key(&key).unwrap();
+
+        let found = db.validate_enrollment_key(&security::hash_key("wrong-key")).unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn revoke_enrollment_key() {
+        let db = test_db();
+        let key = sample_key("Revoke Test", "key123");
+        let id = key.id;
+        db.insert_enrollment_key(&key).unwrap();
+
+        assert!(db.revoke_enrollment_key(&id).unwrap());
+
+        let keys = db.list_enrollment_keys().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].revoked);
+        assert!(keys[0].revoked_at.is_some());
+    }
+
+    #[test]
+    fn revoke_already_revoked_returns_false() {
+        let db = test_db();
+        let key = sample_key("Double Revoke", "key456");
+        let id = key.id;
+        db.insert_enrollment_key(&key).unwrap();
+
+        assert!(db.revoke_enrollment_key(&id).unwrap());
+        assert!(!db.revoke_enrollment_key(&id).unwrap());
+    }
+
+    #[test]
+    fn delete_enrollment_key() {
+        let db = test_db();
+        let key = sample_key("Delete Test", "key789");
+        let id = key.id;
+        db.insert_enrollment_key(&key).unwrap();
+
+        assert!(db.delete_enrollment_key(&id).unwrap());
+        assert!(db.list_enrollment_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_nonexistent_key_returns_false() {
+        let db = test_db();
+        assert!(!db.delete_enrollment_key(&Uuid::new_v4()).unwrap());
+    }
+
+    #[test]
+    fn multiple_keys_listed_newest_first() {
+        let db = test_db();
+        let mut k1 = sample_key("First", "aaa");
+        k1.created_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        let mut k2 = sample_key("Second", "bbb");
+        k2.created_at = chrono::Utc::now();
+
+        db.insert_enrollment_key(&k1).unwrap();
+        db.insert_enrollment_key(&k2).unwrap();
+
+        let keys = db.list_enrollment_keys().unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].label, "Second");
+        assert_eq!(keys[1].label, "First");
+    }
+}

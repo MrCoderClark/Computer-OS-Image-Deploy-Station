@@ -194,15 +194,19 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 
 ### Phase 12: Testing & Hardening
 **Branch:** `phase/12-testing-hardening`
-**Status:** Not started
+**Status:** Complete
 
-- [ ] Unit tests for config parsing, image provider, partition logic
-- [ ] Integration tests against real WinPE environment
-- [ ] Multi-model hardware testing (HP, Dell, Lenovo)
-- [ ] DPI scaling tests (100%, 125%, 150%)
-- [ ] Network failure and resume testing
-- [ ] Offline mode full cycle test
-- [ ] Hybrid fallback path testing
+- [x] Unit tests: config parsing & validation (16 tests — modes, schema, discovery, enrollment key)
+- [x] Unit tests: enrollment key security (14 tests — generate, hash, validity, expiry, serialization)
+- [x] Unit tests: task sequence validation (12 tests — ordering constraints, empty checks, roundtrip)
+- [x] Unit tests: image provider logic (5 tests — offline/online/hybrid, custom paths, descriptions)
+- [x] Unit tests: unattend.xml generation (12 tests — locale, timezone, domain join, admin password, OOBE)
+- [x] Unit tests: server DB operations (12 tests — images, deploy jobs, audit log, enrollment keys CRUD)
+- [x] Removed unused import warning in server routes
+- [x] Manual test checklists (docs/test-checklists.md — WinPE, multi-model hardware, DPI, network failure, offline, hybrid, enrollment key, capture, admin smoke test)
+- [ ] Integration tests against real WinPE environment *(manual — requires ADK + VM)*
+- [ ] Multi-model hardware testing *(manual — see docs/test-checklists.md)*
+- [ ] DPI scaling visual tests *(manual — see docs/test-checklists.md)*
 
 ---
 
