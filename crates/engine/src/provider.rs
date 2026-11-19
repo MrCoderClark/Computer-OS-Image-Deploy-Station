@@ -15,17 +15,41 @@ pub struct LocalDiskProvider {
 
 impl LocalDiskProvider {
     pub fn from_config(config: &SuiteConfig) -> Result<Self> {
-        let wim_path = config
+        let configured = config
             .image
             .as_ref()
             .and_then(|i| i.wim_path.as_deref())
             .unwrap_or(r"X:\imaging\deploy.wim");
 
+        let wim_path = if Path::new(configured).exists() {
+            PathBuf::from(configured)
+        } else {
+            scan_for_wim().unwrap_or_else(|| PathBuf::from(configured))
+        };
+
         Ok(Self {
-            path: PathBuf::from(wim_path),
+            path: wim_path,
             index: 1,
         })
     }
+}
+
+fn scan_for_wim() -> Option<PathBuf> {
+    let search_paths = ["images\\deploy.wim", "deploy.wim"];
+    for letter in b'C'..=b'Z' {
+        let drive = format!("{}:\\", letter as char);
+        if !Path::new(&drive).exists() {
+            continue;
+        }
+        for rel in &search_paths {
+            let candidate = PathBuf::from(&drive).join(rel);
+            if candidate.exists() {
+                tracing::info!("Found WIM at {}", candidate.display());
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 impl ImageProvider for LocalDiskProvider {

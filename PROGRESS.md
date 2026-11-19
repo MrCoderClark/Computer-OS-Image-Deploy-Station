@@ -1,6 +1,6 @@
 # Windows Imaging Suite — Progress Tracker
 
-> Updated: 2026-11-18
+> Updated: 2026-11-19
 
 ## Build Order
 
@@ -207,6 +207,107 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 - [ ] Integration tests against real WinPE environment *(manual — requires ADK + VM)*
 - [ ] Multi-model hardware testing *(manual — see docs/test-checklists.md)*
 - [ ] DPI scaling visual tests *(manual — see docs/test-checklists.md)*
+
+---
+
+### Phase 13: USB Disk Automation
+**Branch:** `phase/13-usb-disk-automation`
+**Status:** In Progress
+
+- [x] Physical USB disk enumeration via `Get-Disk` (replaces volume-based `Get-Volume`)
+- [x] Automatic disk cleaning and GPT initialization (`Clear-Disk`, `Initialize-Disk`)
+- [x] Automatic partitioning: FAT32 boot (2GB) + NTFS payload for offline/hybrid, single FAT32 for online
+- [x] Full end-to-end USB build from admin app: disk prep → WinPE → agent inject → config → WIM copy
+- [x] Progress events from backend to frontend via Tauri event system
+- [x] WIM file path input in wizard step 2 for offline/hybrid mode
+- [x] Confirmation dialog before disk wipe
+- [x] Frontend shows physical disks (disk number, model, size, partition count)
+- [x] Agent WIM path scanning: searches all volumes for deploy.wim if default path not found
+- [x] Fixed build-winpe-media.ps1: set ADK environment variables (WinPERoot, DISMRoot, etc.)
+- [ ] Admin app elevation prompt (currently requires manual "Run as Administrator")
+- [ ] WIM file browser dialog (currently manual path entry)
+
+---
+
+### Phase 13b: WinPE Agent GUI — Hyper-V Boot Testing (ACTIVE — BLOCKED)
+**Branch:** `phase/13-usb-disk-automation`
+**Status:** In Progress — agent GUI does not yet start in WinPE
+
+Added `tools/test-winpe-hyperv.ps1` to iterate on the agent in a Hyper-V VM
+instead of physical USB (build WinPE ISO → inject agent + DLLs → create/boot
+Gen2 VM). This surfaced a real blocker that also affects the production USB.
+
+**What works now (fixed this session):**
+- [x] ISO creation via `oscdimg` — use `-bootdata:1#pEF,e,b<efisys>` (UEFI-only),
+      drop `-n` (conflicts with `-u2`); copy `efisys_noprompt.bin` to a space-free
+      path so no quote-escaping is needed.
+- [x] Gen2 VM boots the ISO — Secure Boot **off** + DVD first boot device, applied
+      on *every* run (WinPE media is unsigned).
+- [x] DLL auto-injection: `test-winpe-hyperv.ps1` parses the agent's PE import
+      table and transitively injects every missing **real** DLL from the host
+      (API-Set `api-ms-win-*`/`ext-ms-*` contracts are skipped — WinPE's apiset
+      schema resolves them).
+- [x] Agent binary itself is fine (`crt-static` is set in `.cargo/config.toml`).
+
+**The blocker:** agent exits immediately with `-1073741515` (`0xC0000135`,
+`STATUS_DLL_NOT_FOUND`) before any Rust code runs.
+
+**Diagnosis (confirmed, not guesswork):**
+- The agent's **complete static dependency closure is 25 real DLLs** — all 25 are
+  present in WinPE after injection (verified in-VM). So the *static* chain is NOT
+  the problem.
+- The failure is a **delay-loaded** DLL triggered during window / GPU-surface
+  creation. A delay-load that can't find its DLL raises `STATUS_DLL_NOT_FOUND` as
+  an unhandled exception → process exits `0xC0000135`.
+- Prime suspect: **`dcomp.dll` (DirectComposition)** — `dwmapi.dll` delay-loads it
+  and wgpu's D3D12 surface uses a DirectComposition visual. WinPE has no DWM /
+  DirectComposition / DirectX runtime. (⚠️ left off mid-step: still need to run the
+  in-VM check `for %D in (dcomp.dll dxcore.dll d3d11.dll d2d1.dll dwrite.dll
+  windowscodecs.dll cryptsp.dll twinapi.appcore.dll) do @if not exist
+  X:\Windows\System32\%D echo MISSING: %D` to confirm which delay DLL is missing.)
+
+**Root cause:** the agent's GUI stack (`winit` + `eframe`/**wgpu on Direct3D 12**)
+expects the Windows desktop composition + DirectX runtime, which WinPE omits by
+design. Grafting host DLLs in chases an ever-deeper dependency tree and risks
+host-vs-WinPE version skew (host is 26300, ADK WinPE is older).
+
+**DECISION NEEDED → recommended fix (do this next):**
+- [ ] Switch agent `eframe` backend from **`wgpu` → `glow`** (OpenGL):
+      edit `crates/agent/Cargo.toml` line 20 features `["default_fonts", "wgpu"]`
+      → `["default_fonts", "glow"]`, then `cargo build --release -p imaging-agent`.
+      Removes the entire D3D12 / DirectComposition path so `dcomp` is never
+      triggered. (Check `crates/agent/src/main.rs` NativeOptions still compiles;
+      glow is eframe's default renderer.)
+- [ ] Drop in **Mesa3D's software `opengl32.dll`** (llvmpipe, `mesa3d` releases,
+      the `...-mesa3d-...` package with `x64/opengl32.dll`). It is self-contained
+      (deps: kernel32/user32/gdi32 only — no apiset chase, no GPU, no version skew).
+      Inject it in place of the host `opengl32.dll` in `test-winpe-hyperv.ps1`.
+- [ ] Optionally set `WGPU_BACKEND=gl` in startnet if any wgpu path remains.
+- [ ] Rebuild ISO, boot VM, confirm the egui window renders (software rendering).
+- [ ] Once proven: port the final DLL set + Mesa into the **production** builder
+      (`tools/build-winpe-media.ps1` and `crates/admin/src-tauri/src/lib.rs:519`,
+      which currently inject only `api-ms-win-core-synch-l1-2-0.dll`).
+
+**Alternative (NOT recommended):** keep injecting the composition stack
+(`dcomp.dll` + `d3d11`/`d2d1`/`dwrite`/…). Fragile, bloats boot.wim, version-skew
+prone.
+
+**Fallback if glow+Mesa still needs `dwmapi`/`uxtheme` quirks:** build a tiny stub
+`dwmapi.dll` exporting the few functions winit calls as no-ops (zero heavy deps).
+
+**Test loop:** elevated PowerShell →
+`.\tools\test-winpe-hyperv.ps1` → `Start-VM -Name 'WinPE-Agent-Test'` →
+`vmconnect localhost 'WinPE-Agent-Test'`. On agent failure, `startnet.cmd` prints
+a DLL presence table. The admin app does NOT need to be running for this test.
+
+---
+
+### Future: Installer & Packaging
+**Status:** TODO
+
+- [ ] Tauri MSI/NSIS installer for admin app (configure tauri.conf.json: app metadata, icons, bundle settings)
+- [ ] Server packaging (standalone .exe, optionally as a Windows Service)
+- [ ] Agent binary — no installer needed (embedded in WinPE boot media by build-winpe-media.ps1)
 
 ---
 

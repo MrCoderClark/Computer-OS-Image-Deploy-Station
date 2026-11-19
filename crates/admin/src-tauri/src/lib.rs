@@ -6,7 +6,7 @@ use imaging_common::security::{CreateKeyRequest, CreateKeyResponse, KeyListEntry
 use imaging_common::sequence::{TaskSequence, TaskStep, StepType, StepConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -196,20 +196,22 @@ fn validate_config(json_str: String) -> Result<String, String> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UsbDevice {
-    pub drive_letter: String,
-    pub label: String,
+pub struct UsbDisk {
+    pub disk_number: u32,
+    pub friendly_name: String,
     pub size_bytes: u64,
-    pub is_removable: bool,
+    pub partition_count: u32,
+    pub is_usb: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MediaBuildRequest {
     pub mode: String,
+    pub disk_number: u32,
     pub image_id: Option<String>,
     pub image_name: Option<String>,
     pub image_os_family: Option<String>,
-    pub drive_letter: String,
+    pub wim_source_path: Option<String>,
     pub server_host: Option<String>,
     pub server_port: Option<u16>,
     pub discovery: Option<String>,
@@ -226,17 +228,17 @@ pub struct MediaBuildProgress {
 }
 
 #[tauri::command]
-async fn list_usb_devices() -> Result<Vec<UsbDevice>, String> {
-    tokio::task::spawn_blocking(|| enumerate_removable_drives())
+async fn list_usb_disks() -> Result<Vec<UsbDisk>, String> {
+    tokio::task::spawn_blocking(|| enumerate_usb_disks())
         .await
         .map_err(|e| format!("Task failed: {e}"))?
 }
 
-fn enumerate_removable_drives() -> Result<Vec<UsbDevice>, String> {
+fn enumerate_usb_disks() -> Result<Vec<UsbDisk>, String> {
     let output = std::process::Command::new("powershell")
         .args([
             "-NoProfile", "-Command",
-            "Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object DriveLetter, FileSystemLabel, Size | ConvertTo-Json -Compress"
+            "Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Select-Object Number, FriendlyName, Size, NumberOfPartitions | ConvertTo-Json -Compress"
         ])
         .output()
         .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
@@ -253,7 +255,6 @@ fn enumerate_removable_drives() -> Result<Vec<UsbDevice>, String> {
         return Ok(Vec::new());
     }
 
-    // PowerShell returns a single object (not array) when there's only one result
     let raw: serde_json::Value = serde_json::from_str(trimmed)
         .map_err(|e| format!("JSON parse error: {e}"))?;
 
@@ -264,26 +265,93 @@ fn enumerate_removable_drives() -> Result<Vec<UsbDevice>, String> {
     };
 
     Ok(items.iter().filter_map(|item| {
-        let letter = item.get("DriveLetter")?.as_str()?;
-        let label = item.get("FileSystemLabel")
+        let number = item.get("Number")?.as_u64()? as u32;
+        let name = item.get("FriendlyName")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or("USB Disk");
         let size = item.get("Size")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let partitions = item.get("NumberOfPartitions")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
 
-        Some(UsbDevice {
-            drive_letter: format!("{letter}:"),
-            label: label.to_string(),
+        Some(UsbDisk {
+            disk_number: number,
+            friendly_name: name.to_string(),
             size_bytes: size,
-            is_removable: true,
+            partition_count: partitions,
+            is_usb: true,
         })
     }).collect())
 }
 
+fn run_ps(script: &str) -> Result<String, String> {
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .output()
+        .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("{stderr}\n{stdout}").trim().to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn find_adk_path() -> Result<String, String> {
+    let default = r"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit";
+    let deploy_tools = format!(r"{default}\Deployment Tools");
+    let winpe_addon = format!(r"{default}\Windows Preinstallation Environment");
+
+    if !std::path::Path::new(&deploy_tools).exists() {
+        return Err("Windows ADK Deployment Tools not found. Install the Windows 11 ADK (24H2+).".into());
+    }
+    if !std::path::Path::new(&winpe_addon).exists() {
+        return Err("WinPE add-on not found. Install the Windows PE add-on for the Windows ADK.".into());
+    }
+
+    Ok(default.to_string())
+}
+
+fn find_agent_binary() -> Result<std::path::PathBuf, String> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Some(ref dir) = exe_dir {
+        candidates.push(dir.join("imaging-agent.exe"));
+    }
+
+    candidates.push(std::path::PathBuf::from(r"target\release\imaging-agent.exe"));
+    candidates.push(std::path::PathBuf::from(r"target\debug\imaging-agent.exe"));
+    candidates.push(std::path::PathBuf::from(r"..\..\..\target\release\imaging-agent.exe"));
+    candidates.push(std::path::PathBuf::from(r"..\..\..\target\debug\imaging-agent.exe"));
+    candidates.push(std::path::PathBuf::from(r"imaging-agent.exe"));
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            let resolved = candidate.canonicalize().unwrap_or_else(|_| candidate.clone());
+            tracing::info!("Found agent binary at {}", resolved.display());
+            return Ok(resolved);
+        }
+    }
+
+    Err("imaging-agent.exe not found. Build it first: cargo build --release -p imaging-agent".into())
+}
+
+fn is_running_elevated() -> bool {
+    run_ps("([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)")
+        .map(|s| s.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 #[tauri::command]
-async fn build_media(request: MediaBuildRequest) -> Result<String, String> {
-    // Step 1: Generate config.json
+async fn build_media(request: MediaBuildRequest, app: tauri::AppHandle) -> Result<String, String> {
     let config_json = build_config(ConfigBuildRequest {
         mode: request.mode.clone(),
         server_host: request.server_host,
@@ -296,31 +364,263 @@ async fn build_media(request: MediaBuildRequest) -> Result<String, String> {
         enrollment_key: request.enrollment_key,
     })?;
 
-    let drive = request.drive_letter.clone();
+    let disk_number = request.disk_number;
+    let mode = request.mode.clone();
+    let wim_source = request.wim_source_path.clone();
 
     tokio::task::spawn_blocking(move || {
-        // Step 2: Create directory structure
-        let imaging_dir = format!(r"{drive}\imaging");
+        let emit = |step: &str, pct: u8, msg: &str| {
+            let _ = app.emit("build-progress", MediaBuildProgress {
+                step: step.into(),
+                pct,
+                message: msg.into(),
+            });
+        };
+
+        // --- Validate prerequisites ---
+        emit("validate", 0, "Checking prerequisites...");
+
+        if !is_running_elevated() {
+            return Err("Administrator privileges required. Restart DeployStation as Administrator.".into());
+        }
+
+        let adk_path = find_adk_path()?;
+        let deploy_tools = format!(r"{adk_path}\Deployment Tools");
+        let winpe_addon = format!(r"{adk_path}\Windows Preinstallation Environment");
+
+        let agent_path = find_agent_binary()?;
+        tracing::info!("Agent binary: {}", agent_path.display());
+
+        let needs_wim = mode == "offline" || mode == "hybrid";
+        if needs_wim {
+            if let Some(ref wim) = wim_source {
+                if !std::path::Path::new(wim).exists() {
+                    return Err(format!("WIM file not found: {wim}"));
+                }
+            } else {
+                return Err("WIM file path required for offline/hybrid mode.".into());
+            }
+        }
+
+        // --- Clean disk ---
+        emit("disk", 5, &format!("Cleaning disk {disk_number}..."));
+        tracing::info!("Cleaning disk {disk_number}");
+
+        // Ensure automount is enabled via script file (pipe to diskpart is unreliable)
+        let dp_enable = format!(r"{}\automount.txt", std::env::temp_dir().to_string_lossy().trim_end_matches('\\'));
+        std::fs::write(&dp_enable, "automount enable\nexit\n").ok();
+        run_ps(&format!("diskpart /s '{dp_enable}'")).ok();
+        std::fs::remove_file(&dp_enable).ok();
+
+        // Stop ShellHWDetection to prevent "format disk" popups during partitioning
+        run_ps("Stop-Service ShellHWDetection -Force -ErrorAction SilentlyContinue").ok();
+
+        if needs_wim {
+            emit("disk", 10, "Creating boot and data partitions...");
+            let dp_script = format!(r"{}\deploystation_dp.txt", std::env::temp_dir().to_string_lossy().trim_end_matches('\\'));
+            std::fs::write(&dp_script, format!(
+                "select disk {disk_number}\nclean\nconvert mbr\ncreate partition primary size=2048\nformat fs=fat32 quick label=DEPLOY_BOOT\nactive\nassign\ncreate partition primary\nformat fs=ntfs quick label=DEPLOY_DATA\nassign\nexit\n"
+            )).map_err(|e| format!("Failed to write diskpart script: {e}"))?;
+            run_ps(&format!("diskpart /s '{dp_script}'"))
+                .map_err(|e| format!("Failed to partition disk: {e}"))?;
+            std::fs::remove_file(&dp_script).ok();
+        } else {
+            emit("disk", 10, "Creating FAT32 boot partition...");
+            let dp_script = format!(r"{}\deploystation_dp.txt", std::env::temp_dir().to_string_lossy().trim_end_matches('\\'));
+            std::fs::write(&dp_script, format!(
+                "select disk {disk_number}\nclean\nconvert mbr\ncreate partition primary\nformat fs=fat32 quick label=DEPLOY_USB\nactive\nassign\nexit\n"
+            )).map_err(|e| format!("Failed to write diskpart script: {e}"))?;
+            run_ps(&format!("diskpart /s '{dp_script}'"))
+                .map_err(|e| format!("Failed to partition disk: {e}"))?;
+            std::fs::remove_file(&dp_script).ok();
+        }
+
+        // Restart ShellHWDetection
+        run_ps("Start-Service ShellHWDetection -ErrorAction SilentlyContinue").ok();
+
+        // Get drive letter — simple approach, no fancy checks
+        emit("disk", 15, "Identifying partitions...");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        let boot_letter = run_ps(&format!(
+            "$dl = (Get-Partition -DiskNumber {disk_number} | Where-Object {{ $_.Size -gt 0 }} | Sort-Object PartitionNumber | Select-Object -First 1).DriveLetter; \
+             if ($dl) {{ $dl }} else {{ '' }}"
+        )).map_err(|e| format!("Failed to get boot drive letter: {e}"))?;
+        let boot_letter = boot_letter.trim().to_string();
+
+        if boot_letter.is_empty() {
+            return Err("No drive letter on boot partition. Run 'echo automount enable | diskpart' in an admin prompt, then retry.".into());
+        }
+
+        let boot_drive = format!("{boot_letter}:");
+        tracing::info!("Boot partition: {boot_drive}");
+
+        if needs_wim {
+            let data_letter = run_ps(&format!(
+                "$dl = (Get-Partition -DiskNumber {disk_number} | Where-Object {{ $_.Size -gt 0 }} | Sort-Object PartitionNumber | Select-Object -Last 1).DriveLetter; \
+                 if ($dl) {{ $dl }} else {{ '' }}"
+            )).map_err(|e| format!("Failed to get data drive letter: {e}"))?;
+            let data_letter = data_letter.trim().to_string();
+            if data_letter.is_empty() {
+                return Err("No drive letter on data partition.".into());
+            }
+
+            emit("wim", 20, "Copying WIM to USB (this may take several minutes)...");
+            let wim = wim_source.as_ref().unwrap();
+            let dest_dir = format!(r"{data_letter}:\images");
+            std::fs::create_dir_all(&dest_dir)
+                .map_err(|e| format!("Failed to create images dir: {e}"))?;
+            let dest_path = format!(r"{dest_dir}\deploy.wim");
+            std::fs::copy(wim, &dest_path)
+                .map_err(|e| format!("Failed to copy WIM: {e}"))?;
+            tracing::info!("WIM copied to {dest_path}");
+        }
+
+        // --- Build WinPE ---
+        emit("winpe", 35, "Creating WinPE working directory...");
+
+        let temp = std::env::temp_dir();
+        let temp_str = temp.to_string_lossy();
+        let temp_str = temp_str.trim_end_matches('\\');
+        let work_dir = format!(r"{temp_str}\DeployStation-WinPE-{}", std::process::id());
+
+        let copype_script = format!(
+            "$env:WinPERoot = '{winpe_addon}'; \
+             $env:DISMRoot = '{deploy_tools}\\amd64\\DISM'; \
+             $env:OSCDImgRoot = '{deploy_tools}\\amd64\\Oscdimg'; \
+             $env:BCDBootRoot = '{deploy_tools}\\amd64\\BCDBoot'; \
+             $env:ImagingRoot = '{deploy_tools}\\amd64'; \
+             $env:Path = '{winpe_addon};{deploy_tools}\\amd64\\DISM;{deploy_tools}\\amd64;{deploy_tools};' + $env:Path; \
+             & cmd.exe /c \"`\"{winpe_addon}\\copype.cmd`\" amd64 `\"{work_dir}`\"\" 2>&1 | Out-Null; \
+             if (-not (Test-Path '{work_dir}\\media')) {{ throw 'copype failed' }}"
+        );
+        run_ps(&copype_script).map_err(|e| format!("Failed to create WinPE directory: {e}"))?;
+
+        // --- Mount boot.wim and inject agent ---
+        emit("winpe", 45, "Mounting boot.wim and injecting agent...");
+
+        let boot_wim = format!(r"{work_dir}\media\sources\boot.wim");
+        let mount_dir = format!(r"{work_dir}\mount");
+        std::fs::create_dir_all(&mount_dir).ok();
+
+        run_ps(&format!(
+            "Mount-WindowsImage -ImagePath '{boot_wim}' -Index 1 -Path '{mount_dir}' -ErrorAction Stop"
+        )).map_err(|e| format!("Failed to mount boot.wim: {e}"))?;
+
+        // Copy agent binary
+        let agent_dest = format!(r"{mount_dir}\Windows\System32\imaging-agent.exe");
+        std::fs::copy(&agent_path, &agent_dest)
+            .map_err(|e| format!("Failed to copy agent binary: {e}"))?;
+        tracing::info!("Agent injected into boot.wim");
+
+        // Inject graphics DLLs required by egui (not present in WinPE by default)
+        emit("winpe", 50, "Injecting graphics DLLs...");
+        let sys32 = r"C:\Windows\System32";
+        let dlls_to_inject = [
+            "api-ms-win-core-synch-l1-2-0.dll",
+        ];
+        let dll_search_dirs = [
+            sys32.to_string(),
+            format!(r"{sys32}\downlevel"),
+        ];
+        for dll in &dlls_to_inject {
+            let dst = format!(r"{mount_dir}\Windows\System32\{dll}");
+            if std::path::Path::new(&dst).exists() {
+                tracing::info!("{dll} already in WinPE — skipping");
+                continue;
+            }
+            let mut found = false;
+            for dir in &dll_search_dirs {
+                let src = format!(r"{dir}\{dll}");
+                if std::path::Path::new(&src).exists() {
+                    match std::fs::copy(&src, &dst) {
+                        Ok(_) => {
+                            tracing::info!("Injected {dll} from {dir} into boot.wim");
+                            found = true;
+                            break;
+                        }
+                        Err(e) => tracing::warn!("Could not inject {dll} from {dir}: {e}"),
+                    }
+                }
+            }
+            if !found {
+                tracing::warn!("{dll} not found on host — skipping");
+            }
+        }
+
+        // Write startnet.cmd with diagnostics on failure
+        emit("winpe", 55, "Configuring WinPE startup...");
+        let startnet = format!(r"{mount_dir}\Windows\System32\startnet.cmd");
+        let startnet_content = "\
+@echo off\r\n\
+wpeinit\r\n\
+echo.\r\n\
+echo ============================================\r\n\
+echo   DeployStation - Windows Imaging Agent\r\n\
+echo ============================================\r\n\
+echo.\r\n\
+echo SystemRoot = %SystemRoot%\r\n\
+echo Starting agent...\r\n\
+imaging-agent.exe\r\n\
+set AGENT_EXIT=%errorlevel%\r\n\
+if %AGENT_EXIT% NEQ 0 (\r\n\
+    echo.\r\n\
+    echo !! Agent exited with code %AGENT_EXIT%\r\n\
+    echo.\r\n\
+    echo --- Diagnostics ---\r\n\
+    echo Checking DLLs in %SystemRoot%\\System32:\r\n\
+    for %%D in (opengl32.dll dwmapi.dll imm32.dll shcore.dll uxtheme.dll dbghelp.dll bcryptprimitives.dll crypt32.dll secur32.dll oleaut32.dll shlwapi.dll uiautomationcore.dll user32.dll gdi32.dll kernel32.dll ntdll.dll api-ms-win-core-synch-l1-2-0.dll) do (\r\n\
+        if exist %SystemRoot%\\System32\\%%D (echo   %%D ... OK) else (echo   %%D ... MISSING)\r\n\
+    )\r\n\
+    echo.\r\n\
+    echo Agent binary:\r\n\
+    dir %SystemRoot%\\System32\\imaging-agent.exe\r\n\
+    echo.\r\n\
+    echo All DLLs in System32 starting with o:\r\n\
+    dir %SystemRoot%\\System32\\o*.dll\r\n\
+)\r\n\
+echo.\r\n\
+echo Press any key to open command prompt...\r\n\
+pause >nul\r\n\
+cmd.exe\r\n";
+        std::fs::write(&startnet, startnet_content)
+            .map_err(|e| format!("Failed to write startnet.cmd: {e}"))?;
+
+        // Unmount and save
+        emit("winpe", 60, "Saving boot.wim (this takes a moment)...");
+        run_ps(&format!(
+            "Dismount-WindowsImage -Path '{mount_dir}' -Save -ErrorAction Stop"
+        )).map_err(|e| format!("Failed to unmount boot.wim: {e}"))?;
+
+        // --- Copy boot files to USB ---
+        emit("copy", 70, "Copying WinPE boot files to USB...");
+
+        let media_dir = format!(r"{work_dir}\media");
+
+        run_ps(&format!(
+            "& robocopy '{media_dir}' '{boot_drive}\\' /E /R:3 /W:2 /NFL /NDL /NJH /NJS /NP; if ($LASTEXITCODE -ge 8) {{ throw \"robocopy failed with exit code $LASTEXITCODE\" }}; exit 0"
+        )).map_err(|e| format!("Failed to copy boot files: {e}"))?;
+
+        // --- Write config ---
+        emit("config", 85, "Writing configuration...");
+
+        let imaging_dir = format!(r"{boot_drive}\imaging");
         std::fs::create_dir_all(&imaging_dir)
             .map_err(|e| format!("Failed to create imaging dir: {e}"))?;
-
-        let logs_dir = format!(r"{drive}\imaging\logs");
-        std::fs::create_dir_all(&logs_dir)
+        std::fs::create_dir_all(format!(r"{imaging_dir}\logs"))
             .map_err(|e| format!("Failed to create logs dir: {e}"))?;
 
-        // Step 3: Write config.json
-        let config_path = format!(r"{drive}\imaging\config.json");
+        let config_path = format!(r"{imaging_dir}\config.json");
         std::fs::write(&config_path, &config_json)
             .map_err(|e| format!("Failed to write config.json: {e}"))?;
-
         tracing::info!("Config written to {config_path}");
 
-        // Note: Actual WinPE boot.wim copy, agent binary copy, and
-        // partition formatting require ADK tools and elevated privileges.
-        // This writes the config and directory structure; the full
-        // build-winpe-media.ps1 script handles the rest.
+        // --- Cleanup ---
+        emit("cleanup", 95, "Cleaning up temporary files...");
+        std::fs::remove_dir_all(&work_dir).ok();
 
-        Ok(format!("Media build prepared on {drive}. Config written to {config_path}. Run build-winpe-media.ps1 with ADK to complete the boot media."))
+        emit("done", 100, "Build complete!");
+        Ok(format!("Bootable USB created on {boot_drive}"))
     })
     .await
     .map_err(|e| format!("Build task failed: {e}"))?
@@ -733,7 +1033,7 @@ pub fn run() {
             get_images,
             build_config,
             validate_config,
-            list_usb_devices,
+            list_usb_disks,
             build_media,
             get_sequences,
             save_sequence,

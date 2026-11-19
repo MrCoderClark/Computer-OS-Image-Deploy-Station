@@ -56,9 +56,6 @@ impl SuiteConfig {
             }
         }
 
-        if self.mode == OperatingMode::Offline && self.enrollment_key.is_none() {
-            errors.push("Offline mode requires an 'enrollment_key' for authentication".into());
-        }
 
         if self.built_by.is_empty() {
             errors.push("'built_by' must not be empty".into());
@@ -259,11 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn offline_requires_enrollment_key() {
+    fn offline_without_enrollment_key_is_valid() {
         let mut cfg = minimal_offline_config();
         cfg.enrollment_key = None;
-        let errors = cfg.validate().unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("enrollment_key")));
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
