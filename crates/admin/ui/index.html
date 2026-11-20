@@ -887,7 +887,10 @@
         <div id="wiz-wim-local" style="margin-bottom:16px">
           <div class="form-row">
             <label class="form-label">WIM File Path</label>
-            <input class="form-input" id="wiz-wim-path" placeholder="C:\Images\install.wim">
+            <div style="display:flex;gap:8px">
+              <input class="form-input" id="wiz-wim-path" placeholder="C:\Images\install.wim" style="flex:1">
+              <button class="btn" id="wiz-wim-browse" type="button">Browse…</button>
+            </div>
           </div>
           <p style="font-size:12px;color:var(--text-muted);margin-top:4px">
             Path to the .wim file on this computer. Required for offline/hybrid mode.
@@ -1869,6 +1872,17 @@
     }
 
     document.getElementById('refresh-usb').addEventListener('click', () => loadWizUsb());
+
+    document.getElementById('wiz-wim-browse').addEventListener('click', async () => {
+      try {
+        const picked = await invoke('browse_wim_file');
+        if (picked) {
+          document.getElementById('wiz-wim-path').value = picked;
+        }
+      } catch (e) {
+        showToast('Could not open file picker: ' + e, 'error');
+      }
+    });
 
     function renderBuildSummary() {
       const el = document.getElementById('build-summary');

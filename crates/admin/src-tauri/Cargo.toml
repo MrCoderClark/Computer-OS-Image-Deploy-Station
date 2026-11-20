@@ -7,6 +7,7 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+embed-manifest = "1"
 
 [dependencies]
 imaging-common = { path = "../../common" }
@@ -23,6 +24,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json"] }
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 
 [lib]
 name = "imaging_admin_lib"

@@ -224,8 +224,8 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 - [x] Frontend shows physical disks (disk number, model, size, partition count)
 - [x] Agent WIM path scanning: searches all volumes for deploy.wim if default path not found
 - [x] Fixed build-winpe-media.ps1: set ADK environment variables (WinPERoot, DISMRoot, etc.)
-- [ ] Admin app elevation prompt (currently requires manual "Run as Administrator")
-- [ ] WIM file browser dialog (currently manual path entry)
+- [x] Admin app auto-elevates via embedded Windows manifest (requireAdministrator) — UAC prompt on launch, no more manual right-click
+- [x] WIM file browser dialog: Browse… button in wizard step 2 opens native file picker (tauri-plugin-dialog)
 
 ---
 

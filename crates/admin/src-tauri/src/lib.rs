@@ -1015,8 +1015,30 @@ fn urlencoding(s: &str) -> String {
     }).collect()
 }
 
+#[tauri::command]
+async fn browse_wim_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // blocking_pick_file() parks the thread until the user closes the native
+    // dialog — run it off the tokio runtime so the webview and other commands
+    // keep responding while the picker is open.
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("WIM / ESD Images", &["wim", "esd"])
+            .add_filter("All Files", &["*"])
+            .set_title("Select WIM image file")
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("dialog task failed: {e}"))?;
+
+    Ok(result.map(|p| p.to_string()))
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             tracing_subscriber::fmt()
                 .with_env_filter("imaging_admin=debug")
@@ -1067,6 +1089,7 @@ pub fn run() {
             get_enrollment_keys,
             create_enrollment_key,
             revoke_enrollment_key,
+            browse_wim_file,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
