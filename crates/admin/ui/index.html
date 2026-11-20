@@ -884,6 +884,16 @@
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
           Choose the WIM image for this USB stick.
         </p>
+        <div id="wiz-wim-local" style="margin-bottom:16px">
+          <div class="form-row">
+            <label class="form-label">WIM File Path</label>
+            <input class="form-input" id="wiz-wim-path" placeholder="C:\Images\install.wim">
+          </div>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:4px">
+            Path to the .wim file on this computer. Required for offline/hybrid mode.
+            Use a vanilla install.wim from Windows ISO media, or a captured custom image.
+          </p>
+        </div>
         <div id="wiz-image-list"></div>
       </div>
 
@@ -891,10 +901,13 @@
       <div class="wizard-content wizard-panel" id="wiz-step-3" style="display:none">
         <h3 style="margin-bottom:4px">Select USB Target</h3>
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
-          Choose the removable drive to write to. All data on this drive will be erased.
+          Choose the USB disk to write to. The entire disk will be erased and repartitioned automatically.
         </p>
+        <div style="background:var(--error);color:#fff;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:12px">
+          WARNING: All data on the selected disk will be permanently destroyed.
+        </div>
         <div id="wiz-usb-list"></div>
-        <button class="btn" id="refresh-usb" style="margin-top:8px">Refresh drives</button>
+        <button class="btn" id="refresh-usb" style="margin-top:8px">Refresh disks</button>
       </div>
 
       <!-- Step 4: Config -->
@@ -1245,7 +1258,7 @@
       if (duration > 0) setTimeout(dismiss, duration);
     }
 
-    function showConfirm(message) {
+    function showConfirm(message, confirmLabel = 'Delete') {
       return new Promise(resolve => {
         const overlay = document.createElement('div');
         overlay.className = 'dialog-overlay';
@@ -1254,7 +1267,7 @@
             <div class="dialog-message">${message}</div>
             <div class="dialog-actions">
               <button class="btn" id="dlg-cancel">Cancel</button>
-              <button class="btn btn-primary" id="dlg-confirm" style="background:var(--error);border-color:var(--error)">Delete</button>
+              <button class="btn btn-primary" id="dlg-confirm" style="background:var(--error);border-color:var(--error)">${confirmLabel}</button>
             </div>
           </div>
         `;
@@ -1738,6 +1751,7 @@
       if (wizStep === 2 && wizMode === 'online') {
         document.querySelector('#wiz-step-2 p').textContent = 'Online mode streams from the server. No image needed on USB.';
         document.getElementById('wiz-image-list').innerHTML = '<div class="empty-state" style="padding:16px">Skipped — online mode uses server images</div>';
+        document.getElementById('wiz-wim-local').style.display = 'none';
       }
     }
 
@@ -1759,12 +1773,15 @@
       }
 
       // Validation
-      if (wizStep === 2 && wizMode !== 'online' && !wizImage) {
-        showToast('Please select an image', 'error');
-        return;
+      if (wizStep === 2 && wizMode !== 'online') {
+        const wimPath = document.getElementById('wiz-wim-path').value.trim();
+        if (!wimPath && !wizImage) {
+          showToast('Please provide a WIM file path or select a server image', 'error');
+          return;
+        }
       }
       if (wizStep === 3 && !wizUsb) {
-        showToast('Please select a USB drive', 'error');
+        showToast('Please select a USB disk', 'error');
         return;
       }
 
@@ -1788,10 +1805,16 @@
 
     function loadWizImages() {
       const container = document.getElementById('wiz-image-list');
-      if (wizMode === 'online') return;
+      const wimLocal = document.getElementById('wiz-wim-local');
+
+      if (wizMode === 'online') {
+        wimLocal.style.display = 'none';
+        return;
+      }
+      wimLocal.style.display = '';
 
       if (allImages.length === 0) {
-        container.innerHTML = '<div class="empty-state">No images available. Connect to server first.</div>';
+        container.innerHTML = '<div class="empty-state">No server images available. Provide a local WIM file path above.</div>';
         return;
       }
 
@@ -1815,20 +1838,20 @@
 
     async function loadWizUsb() {
       const container = document.getElementById('wiz-usb-list');
-      container.innerHTML = '<div class="empty-state" style="padding:16px">Scanning drives...</div>';
+      container.innerHTML = '<div class="empty-state" style="padding:16px">Scanning USB disks...</div>';
 
       try {
-        const devices = await invoke('list_usb_devices');
-        if (devices.length === 0) {
-          container.innerHTML = '<div class="empty-state" style="padding:16px">No removable USB drives detected. Insert a USB drive and click Refresh.</div>';
+        const disks = await invoke('list_usb_disks');
+        if (disks.length === 0) {
+          container.innerHTML = '<div class="empty-state" style="padding:16px">No USB disks detected. Insert a USB drive and click Refresh.</div>';
           return;
         }
 
-        container.innerHTML = devices.map(d => `
-          <div class="usb-pick${wizUsb && wizUsb.drive_letter === d.drive_letter ? ' selected' : ''}" data-drive="${d.drive_letter}">
+        container.innerHTML = disks.map(d => `
+          <div class="usb-pick${wizUsb && wizUsb.disk_number === d.disk_number ? ' selected' : ''}" data-disk="${d.disk_number}">
             <div>
-              <strong>${d.drive_letter}</strong> ${d.label || 'Removable Disk'}
-              <div style="font-size:12px;color:var(--text-muted)">${formatBytes(d.size_bytes)}</div>
+              <strong>Disk ${d.disk_number}</strong> &mdash; ${d.friendly_name}
+              <div style="font-size:12px;color:var(--text-muted)">${formatBytes(d.size_bytes)} &middot; ${d.partition_count} partition${d.partition_count !== 1 ? 's' : ''}</div>
             </div>
           </div>
         `).join('');
@@ -1837,11 +1860,11 @@
           el.addEventListener('click', () => {
             container.querySelectorAll('.usb-pick').forEach(p => p.classList.remove('selected'));
             el.classList.add('selected');
-            wizUsb = devices.find(d => d.drive_letter === el.dataset.drive);
+            wizUsb = disks.find(d => d.disk_number === parseInt(el.dataset.disk));
           });
         });
       } catch (e) {
-        container.innerHTML = `<div class="empty-state" style="padding:16px;color:var(--error)">Failed to scan drives: ${e}</div>`;
+        container.innerHTML = `<div class="empty-state" style="padding:16px;color:var(--error)">Failed to scan disks: ${e}</div>`;
       }
     }
 
@@ -1850,10 +1873,12 @@
     function renderBuildSummary() {
       const el = document.getElementById('build-summary');
       const modeLabel = { online: 'Online', offline: 'Offline', hybrid: 'Hybrid' }[wizMode] || wizMode;
+      const wimPath = document.getElementById('wiz-wim-path').value;
       el.innerHTML = `
         <strong>Mode:</strong> ${modeLabel}<br>
         <strong>Image:</strong> ${wizMode === 'online' ? '(streamed from server)' : (wizImage ? wizImage.name : '—')}<br>
-        <strong>Target:</strong> ${wizUsb ? wizUsb.drive_letter + ' ' + (wizUsb.label || 'Removable Disk') + ' (' + formatBytes(wizUsb.size_bytes) + ')' : '—'}<br>
+        ${wimPath ? '<strong>WIM File:</strong> ' + wimPath + '<br>' : ''}
+        <strong>Target:</strong> ${wizUsb ? 'Disk ' + wizUsb.disk_number + ' — ' + wizUsb.friendly_name + ' (' + formatBytes(wizUsb.size_bytes) + ')' : '—'}<br>
         <strong>Server:</strong> ${document.getElementById('wiz-host').value}:${document.getElementById('wiz-port').value}<br>
         ${document.getElementById('wiz-unc').value ? '<strong>Capture Share:</strong> ' + document.getElementById('wiz-unc').value + '<br>' : ''}
       `;
@@ -1862,7 +1887,19 @@
     }
 
     async function startBuild() {
-      if (!wizUsb) { showToast('No USB drive selected', 'error'); return; }
+      if (!wizUsb) { showToast('No USB disk selected', 'error'); return; }
+
+      const wimPath = document.getElementById('wiz-wim-path').value.trim();
+      if ((wizMode === 'offline' || wizMode === 'hybrid') && !wimPath) {
+        showToast('WIM file path is required for offline/hybrid mode', 'error');
+        return;
+      }
+
+      const confirmed = await showConfirm(
+        `<strong>ALL DATA on Disk ${wizUsb.disk_number} (${wizUsb.friendly_name}) will be permanently destroyed.</strong><br><br>This cannot be undone. Are you sure you want to continue?`,
+        'Erase & Build'
+      );
+      if (!confirmed) return;
 
       wizBuilding = true;
       updateWizardUI();
@@ -1873,20 +1910,26 @@
       const resultEl = document.getElementById('build-result');
 
       progressEl.style.display = '';
-      statusEl.textContent = 'Preparing media...';
-      barEl.style.width = '20%';
+      barEl.style.background = 'var(--accent)';
+      statusEl.textContent = 'Starting build...';
+      barEl.style.width = '0%';
+
+      // Listen for progress events from backend
+      const unlisten = await window.__TAURI__.event.listen('build-progress', (event) => {
+        const { step, pct, message } = event.payload;
+        barEl.style.width = pct + '%';
+        statusEl.textContent = message;
+      });
 
       try {
-        barEl.style.width = '50%';
-        statusEl.textContent = 'Writing configuration...';
-
         const result = await invoke('build_media', {
           request: {
             mode: wizMode,
+            disk_number: wizUsb.disk_number,
             image_id: wizImage ? wizImage.id : null,
             image_name: wizImage ? wizImage.name : null,
             image_os_family: wizImage ? wizImage.os_family : null,
-            drive_letter: wizUsb.drive_letter,
+            wim_source_path: wimPath || null,
             server_host: document.getElementById('wiz-host').value || null,
             server_port: parseInt(document.getElementById('wiz-port').value) || null,
             discovery: 'fixed',
@@ -1908,6 +1951,7 @@
         resultEl.innerHTML = `<span style="color:var(--error)">&#10007; ${e}</span>`;
       }
 
+      unlisten();
       wizBuilding = false;
       document.getElementById('wiz-next').style.display = 'none';
     }

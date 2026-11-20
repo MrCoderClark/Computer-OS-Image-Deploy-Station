@@ -36,7 +36,12 @@ param(
 
     [string]$UsbDriveLetter,
 
-    [string]$AdkPath = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit"
+    [string]$AdkPath = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit",
+
+    # Directory holding Mesa3D's x64 opengl32.dll + libgallium_wgl.dll (software
+    # OpenGL). Required because WinPE has no GPU driver; the agent renders via
+    # eframe/glow → OpenGL → llvmpipe (CPU). See tools/winpe-inject-deps.ps1.
+    [string]$MesaDir = (Join-Path $PSScriptRoot 'mesa')
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,12 +66,6 @@ if (-not (Test-Path $AgentPath)) {
     exit 1
 }
 
-$copype = Join-Path $deployTools "amd64\copype.cmd" -Resolve -ErrorAction SilentlyContinue
-if (-not $copype) {
-    # Try the DandISetEnv.bat approach
-    $copype = Join-Path $deployTools "copype.cmd" -Resolve -ErrorAction SilentlyContinue
-}
-
 Write-Host "=== DeployStation WinPE Media Builder ===" -ForegroundColor Cyan
 Write-Host "ADK Path: $AdkPath"
 Write-Host "Agent: $AgentPath"
@@ -79,9 +78,22 @@ $mountDir = Join-Path $workDir "mount"
 
 Write-Host "[1/6] Creating WinPE working directory..." -ForegroundColor Yellow
 
-# Use copype to create the WinPE working directory
-$env:Path = "$deployTools\amd64;$deployTools;$env:Path"
-& cmd.exe /c "copype amd64 `"$workDir`"" 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+# Set ADK environment variables that copype.cmd expects
+$env:WinPERoot = $winpeAddon
+$env:DISMRoot = Join-Path $deployTools "amd64\DISM"
+$env:OSCDImgRoot = Join-Path $deployTools "amd64\Oscdimg"
+$env:BCDBootRoot = Join-Path $deployTools "amd64\BCDBoot"
+$env:ImagingRoot = Join-Path $deployTools "amd64"
+$env:Path = "$winpeAddon;$env:DISMRoot;$deployTools\amd64;$deployTools;$env:Path"
+
+$copypeCmd = Join-Path $winpeAddon "copype.cmd"
+if (-not (Test-Path $copypeCmd)) {
+    Write-Error "copype.cmd not found at $copypeCmd"
+    exit 1
+}
+
+Write-Host "  Using copype from: $copypeCmd"
+& cmd.exe /c "`"$copypeCmd`" amd64 `"$workDir`"" 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
 
 if (-not (Test-Path (Join-Path $workDir "media"))) {
     Write-Error "copype failed to create WinPE directory."
@@ -100,13 +112,10 @@ if (-not (Test-Path $mountDir)) {
 
 Mount-WindowsImage -ImagePath $bootWim -Index 1 -Path $mountDir
 
-# --- Inject agent binary ---
+# --- Inject agent binary + its DLL closure + Mesa3D llvmpipe ---
 
-Write-Host "[3/6] Injecting imaging agent..." -ForegroundColor Yellow
-
-$agentDest = Join-Path $mountDir "Windows\System32"
-Copy-Item -Path $AgentPath -Destination (Join-Path $agentDest "imaging-agent.exe") -Force
-Write-Host "  Copied imaging-agent.exe to WinPE System32"
+Write-Host "[3/6] Injecting imaging agent, DLL closure, and Mesa3D..." -ForegroundColor Yellow
+& "$PSScriptRoot\winpe-inject-deps.ps1" -MountDir $mountDir -AgentPath $AgentPath -MesaDir $MesaDir
 
 # --- Create startnet.cmd ---
 
@@ -121,6 +130,10 @@ echo ============================================
 echo   DeployStation - Windows Imaging Agent
 echo ============================================
 echo.
+
+REM Force Mesa3D to use its llvmpipe software renderer directly; skips the failed
+REM ZINK/Vulkan probe that prints a harmless but confusing error on startup.
+set GALLIUM_DRIVER=llvmpipe
 
 REM Map capture share if config exists
 if exist X:\imaging\config.json (
@@ -155,7 +168,7 @@ Write-Host "[6/6] Creating bootable media..." -ForegroundColor Yellow
 if ($UsbDriveLetter) {
     # Write to USB
     Write-Host "  Writing to USB drive $UsbDriveLetter`:..." -ForegroundColor Red
-    $makeMedia = Join-Path $deployTools "amd64\MakeWinPEMedia.cmd"
+    $makeMedia = Join-Path $winpeAddon "MakeWinPEMedia.cmd"
     & cmd.exe /c "`"$makeMedia`" /UFD `"$workDir`" $UsbDriveLetter`:" 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
     Write-Host ""
     Write-Host "USB media created on drive $UsbDriveLetter`:!" -ForegroundColor Green

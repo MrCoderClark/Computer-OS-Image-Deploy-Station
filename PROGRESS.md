@@ -1,6 +1,6 @@
 # Windows Imaging Suite — Progress Tracker
 
-> Updated: 2026-11-18
+> Updated: 2026-11-20
 
 ## Build Order
 
@@ -207,6 +207,71 @@ Per spec §10, build in vertical slices. Each phase gets its own git branch.
 - [ ] Integration tests against real WinPE environment *(manual — requires ADK + VM)*
 - [ ] Multi-model hardware testing *(manual — see docs/test-checklists.md)*
 - [ ] DPI scaling visual tests *(manual — see docs/test-checklists.md)*
+
+---
+
+### Phase 13: USB Disk Automation
+**Branch:** `phase/13-usb-disk-automation`
+**Status:** In Progress
+
+- [x] Physical USB disk enumeration via `Get-Disk` (replaces volume-based `Get-Volume`)
+- [x] Automatic disk cleaning and GPT initialization (`Clear-Disk`, `Initialize-Disk`)
+- [x] Automatic partitioning: FAT32 boot (2GB) + NTFS payload for offline/hybrid, single FAT32 for online
+- [x] Full end-to-end USB build from admin app: disk prep → WinPE → agent inject → config → WIM copy
+- [x] Progress events from backend to frontend via Tauri event system
+- [x] WIM file path input in wizard step 2 for offline/hybrid mode
+- [x] Confirmation dialog before disk wipe
+- [x] Frontend shows physical disks (disk number, model, size, partition count)
+- [x] Agent WIM path scanning: searches all volumes for deploy.wim if default path not found
+- [x] Fixed build-winpe-media.ps1: set ADK environment variables (WinPERoot, DISMRoot, etc.)
+- [ ] Admin app elevation prompt (currently requires manual "Run as Administrator")
+- [ ] WIM file browser dialog (currently manual path entry)
+
+---
+
+### Phase 13b: WinPE Agent GUI — Hyper-V Boot Testing
+**Branch:** `phase/13-usb-disk-automation`
+**Status:** Complete — agent GUI renders in WinPE (confirmed 2026-11-20)
+
+The agent exited with `STATUS_DLL_NOT_FOUND` (0xC0000135) because
+`eframe`/`wgpu` on Direct3D 12 pulled in the Windows desktop composition stack
+(`dcomp.dll`, DirectComposition) via a delay-load path that WinPE does not ship.
+
+**Fix applied:**
+- [x] Flipped `eframe` features `wgpu` → `glow` in `crates/agent/Cargo.toml`.
+      Removes the D3D12/DirectComposition path entirely.
+- [x] Added Mesa3D's software OpenGL stack (`opengl32.dll` + `libgallium_wgl.dll`,
+      llvmpipe) at `tools/mesa/`. Replaces the host `opengl32.dll` ICD stub so
+      the renderer runs entirely in CPU — no GPU driver needed.
+- [x] Set `GALLIUM_DRIVER=llvmpipe` in startnet.cmd to skip Mesa's ZINK/Vulkan
+      probe and suppress its harmless-but-confusing `vulkan-1.dll` error line.
+- [x] Factored the PE-import walker + Mesa install into
+      `tools/winpe-inject-deps.ps1`. All three callers use it:
+      `tools/test-winpe-hyperv.ps1`, `tools/build-winpe-media.ps1`, and the
+      Tauri admin backend (`crates/admin/src-tauri/src/lib.rs`).
+- [x] Hyper-V harness pieces kept: UEFI-only `oscdimg` boot
+      (`-bootdata:1#pEF,e,b<efisys>`), space-free boot-sector path,
+      Secure Boot off + DVD first on every VM provision.
+
+**Test loop:** elevated PowerShell →
+`.\tools\test-winpe-hyperv.ps1` → `Start-VM -Name 'WinPE-Agent-Test'` →
+`vmconnect localhost 'WinPE-Agent-Test'`. Agent main window renders via
+software OpenGL (sluggish but correct).
+
+**Packaging TODO (deferred to installer phase):**
+- The admin app currently resolves `tools/winpe-inject-deps.ps1` and
+  `tools/mesa/` by walking up from the executable. For a released Tauri MSI,
+  these resources need bundling via `tauri.conf.json` and lookup via
+  `app.path().resource_dir()`.
+
+---
+
+### Future: Installer & Packaging
+**Status:** TODO
+
+- [ ] Tauri MSI/NSIS installer for admin app (configure tauri.conf.json: app metadata, icons, bundle settings)
+- [ ] Server packaging (standalone .exe, optionally as a Windows Service)
+- [ ] Agent binary — no installer needed (embedded in WinPE boot media by build-winpe-media.ps1)
 
 ---
 

@@ -35,6 +35,9 @@ Desktop.ini
 *.wim
 *.iso
 
+# Mesa3D drop point — downloaded by the user (see tools/winpe-inject-deps.ps1)
+tools/mesa/
+
 # Database
 *.db
 *.db-shm
