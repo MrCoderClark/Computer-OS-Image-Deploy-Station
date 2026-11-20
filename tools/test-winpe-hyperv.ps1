@@ -1,11 +1,18 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 # Creates a WinPE ISO with the imaging agent for testing in Hyper-V.
 # Usage: .\tools\test-winpe-hyperv.ps1
 
 param(
     [string]$AgentPath = ".\target\release\imaging-agent.exe",
     [string]$OutputIso = ".\winpe-test.iso",
-    [string]$VmName = "WinPE-Agent-Test"
+    [string]$VmName = "WinPE-Agent-Test",
+    # Directory containing the Mesa3D distribution's x64 contents (all DLLs together).
+    # opengl32.dll is only the ICD stub; it needs libgallium_wgl.dll + friends shipped
+    # alongside it. The whole x64\ folder from pal1000/mesa-dist-win release-msvc goes
+    # here. Replaces the host opengl32.dll in WinPE so glow/egui renders without a GPU
+    # or DirectComposition.
+    # Download: https://github.com/pal1000/mesa-dist-win/releases  (x64 release-msvc)
+    [string]$MesaDir = ".\tools\mesa"
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,173 +51,8 @@ $mountDir = "$workDir\mount"
 New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
 Mount-WindowsImage -ImagePath $bootWim -Index 1 -Path $mountDir -ErrorAction Stop
 
-Write-Host "[4/7] Injecting agent and DLLs..." -ForegroundColor Cyan
-Copy-Item -Path $AgentPath -Destination "$mountDir\Windows\System32\imaging-agent.exe" -Force
-
-# Inject every DLL the agent needs but WinPE lacks. Rather than hardcode a list
-# (which we kept guessing wrong), parse the agent's PE import table and walk the
-# dependency tree transitively, injecting each missing DLL from the host. A missing
-# static import makes the loader fail the process with 0xC0000135 (STATUS_DLL_NOT_FOUND)
-# before any agent code runs.
-
-# Parse the import directory of a PE file; return the names of DLLs it statically imports.
-function Get-PeImports {
-    param([string]$FilePath)
-    $out = @()
-    try {
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-    } catch {
-        return $out
-    }
-    if ($bytes.Length -lt 0x40) { return $out }
-    $peOff = [BitConverter]::ToUInt32($bytes, 0x3C)
-    if (($peOff + 24) -ge $bytes.Length) { return $out }
-    # "PE" signature
-    if ($bytes[$peOff] -ne 0x50 -or $bytes[$peOff + 1] -ne 0x45) { return $out }
-    $coff = $peOff + 4
-    $numSections = [BitConverter]::ToUInt16($bytes, $coff + 2)
-    $optSize = [BitConverter]::ToUInt16($bytes, $coff + 16)
-    $optOff = $coff + 20
-    $magic = [BitConverter]::ToUInt16($bytes, $optOff)
-    if ($magic -eq 0x20b) {
-        $dataDirOff = $optOff + 112
-    } elseif ($magic -eq 0x10b) {
-        $dataDirOff = $optOff + 96
-    } else {
-        return $out
-    }
-    # Data directory [1] is the import table.
-    $importRva = [BitConverter]::ToUInt32($bytes, $dataDirOff + 8)
-    if ($importRva -eq 0) { return $out }
-
-    $secOff = $optOff + $optSize
-    $secs = @()
-    for ($i = 0; $i -lt $numSections; $i++) {
-        $s = $secOff + ($i * 40)
-        $secs += [pscustomobject]@{
-            V  = [BitConverter]::ToUInt32($bytes, $s + 12)
-            VS = [BitConverter]::ToUInt32($bytes, $s + 8)
-            R  = [BitConverter]::ToUInt32($bytes, $s + 20)
-        }
-    }
-
-    # Map a relative virtual address to a file offset using the section table.
-    $impOff = -1
-    foreach ($sec in $secs) {
-        $size = [Math]::Max($sec.VS, 1)
-        if ($importRva -ge $sec.V -and $importRva -lt ($sec.V + $size)) {
-            $impOff = $sec.R + ($importRva - $sec.V)
-            break
-        }
-    }
-    if ($impOff -lt 0) { return $out }
-
-    while (($impOff + 20) -le $bytes.Length) {
-        $nameRva = [BitConverter]::ToUInt32($bytes, $impOff + 12)
-        $firstThunk = [BitConverter]::ToUInt32($bytes, $impOff + 16)
-        if ($nameRva -eq 0 -and $firstThunk -eq 0) { break }
-        if ($nameRva -ne 0) {
-            $nameOff = -1
-            foreach ($sec in $secs) {
-                $size = [Math]::Max($sec.VS, 1)
-                if ($nameRva -ge $sec.V -and $nameRva -lt ($sec.V + $size)) {
-                    $nameOff = $sec.R + ($nameRva - $sec.V)
-                    break
-                }
-            }
-            if ($nameOff -ge 0) {
-                $end = $nameOff
-                while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) { $end++ }
-                $name = [System.Text.Encoding]::ASCII.GetString($bytes, $nameOff, $end - $nameOff)
-                if ($name) { $out += $name }
-            }
-        }
-        $impOff += 20
-    }
-    return $out
-}
-
-$winpeSys32 = Join-Path $mountDir "Windows\System32"
-$dllSearchDirs = @("C:\Windows\System32", "C:\Windows\System32\downlevel")
-
-function Find-DllOnHost {
-    param([string]$Dll)
-    foreach ($dir in $dllSearchDirs) {
-        $p = Join-Path $dir $Dll
-        if (Test-Path $p) { return $p }
-    }
-    return $null
-}
-
-# Ensure a DLL is present in WinPE, injecting it from the host if missing.
-# Returns the WinPE path if present/injected, else $null.
-function Add-DllToWinPE {
-    param([string]$Dll)
-    $dst = Join-Path $winpeSys32 $Dll
-    if (Test-Path $dst) { return $dst }
-    $src = Find-DllOnHost $Dll
-    if (-not $src) { return $null }
-    Copy-Item -Path $src -Destination $dst -Force
-    Write-Host "  Injected $Dll" -ForegroundColor Green
-    return $dst
-}
-
-# API Set contract DLLs (api-ms-win-*, ext-ms-*) are virtual: they have no real
-# file and are resolved at load time by WinPE's API Set schema to real DLLs like
-# kernelbase.dll. We inject a stub if the host happens to have one (harmless), but
-# we never recurse into one or warn when it has no file -- that is expected.
-function Test-IsApiSet {
-    param([string]$Dll)
-    return ($Dll -like 'api-ms-win-*' -or $Dll -like 'ext-ms-*')
-}
-
-# Runtime-only DLLs wgpu loads dynamically (NOT in the import table, so the walker
-# below cannot discover them) but which it needs for software rendering in WinPE,
-# which has no GPU:
-#   d3d12.dll          Direct3D 12 runtime      (wgpu loads via libloading)
-#   dxgi.dll           DXGI adapter enumeration  (wgpu loads via libloading)
-#   d3d10warp.dll      WARP software Direct3D rasterizer (the only renderer WinPE can use)
-#   d3dcompiler_47.dll shader compilation
-#   d3d12core.dll      D3D12 core redistributable (newer Windows)
-#   vcruntime140*.dll  VC++ runtime safety net (should be covered by crt-static)
-$runtimeExtras = @(
-    "d3d12.dll", "dxgi.dll", "d3d10warp.dll", "d3dcompiler_47.dll", "d3d12core.dll",
-    "vcruntime140.dll", "vcruntime140_1.dll"
-)
-
-# Breadth-first walk: scan the exe's imports, inject any missing DLL from the host,
-# then scan that injected DLL's own imports too (transitive closure). DLLs already
-# present in WinPE are core and assumed self-consistent, so we do not recurse into them.
-$toScan = [System.Collections.Generic.Queue[string]]::new()
-$seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-
-$toScan.Enqueue((Join-Path $winpeSys32 "imaging-agent.exe"))
-foreach ($x in $runtimeExtras) {
-    [void]$seen.Add($x)
-    $p = Add-DllToWinPE $x
-    if ($p) {
-        $toScan.Enqueue($p)
-    } elseif (-not (Test-Path (Join-Path $winpeSys32 $x))) {
-        Write-Host "  (optional) $x not on host, skipping" -ForegroundColor DarkGray
-    }
-}
-
-while ($toScan.Count -gt 0) {
-    $file = $toScan.Dequeue()
-    foreach ($imp in (Get-PeImports $file)) {
-        if ($seen.Contains($imp)) { continue }
-        [void]$seen.Add($imp)
-        if (Test-Path (Join-Path $winpeSys32 $imp)) { continue }
-        $injected = Add-DllToWinPE $imp
-        if ($injected) {
-            # Recurse into real DLLs only; API Set stubs are leaf virtual contracts.
-            if (-not (Test-IsApiSet $imp)) { $toScan.Enqueue($injected) }
-        } elseif (-not (Test-IsApiSet $imp)) {
-            $leaf = Split-Path $file -Leaf
-            Write-Host "  WARN: $imp needed by $leaf is not on the host either" -ForegroundColor Yellow
-        }
-    }
-}
+Write-Host "[4/7] Injecting agent, DLLs, and Mesa3D..." -ForegroundColor Cyan
+& "$PSScriptRoot\winpe-inject-deps.ps1" -MountDir $mountDir -AgentPath $AgentPath -MesaDir $MesaDir
 
 # Write startnet.cmd
 Write-Host "[5/7] Writing startnet.cmd..." -ForegroundColor Cyan
@@ -222,6 +64,10 @@ echo ============================================
 echo   DeployStation - Windows Imaging Agent
 echo ============================================
 echo.
+REM Force Mesa3D to use its llvmpipe software renderer directly; skips the
+REM failed ZINK/Vulkan probe that prints "MESA: error: ZINK: failed to load
+REM vulkan-1.dll" on startup (harmless but confusing).
+set GALLIUM_DRIVER=llvmpipe
 echo Starting agent...
 imaging-agent.exe
 set AGENT_EXIT=%errorlevel%
@@ -230,7 +76,7 @@ if %AGENT_EXIT% NEQ 0 (
     echo !! Agent exited with code %AGENT_EXIT%
     echo.
     echo --- DLL presence check in %SystemRoot%\System32 ---
-    for %%D in (bcryptprimitives.dll dwmapi.dll uxtheme.dll opengl32.dll d3d12.dll dxgi.dll d3dcompiler_47.dll vcruntime140.dll vcruntime140_1.dll api-ms-win-core-synch-l1-2-0.dll) do (
+    for %%D in (bcryptprimitives.dll dwmapi.dll uxtheme.dll opengl32.dll libgallium_wgl.dll gdi32.dll gdi32full.dll vcruntime140.dll vcruntime140_1.dll msvcp140.dll shlwapi.dll shell32.dll ole32.dll imm32.dll secur32.dll crypt32.dll api-ms-win-core-synch-l1-2-0.dll) do (
         if exist %SystemRoot%\System32\%%D (echo   %%D ... OK) else (echo   %%D ... MISSING)
     )
     echo.

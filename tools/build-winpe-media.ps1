@@ -36,7 +36,12 @@ param(
 
     [string]$UsbDriveLetter,
 
-    [string]$AdkPath = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit"
+    [string]$AdkPath = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit",
+
+    # Directory holding Mesa3D's x64 opengl32.dll + libgallium_wgl.dll (software
+    # OpenGL). Required because WinPE has no GPU driver; the agent renders via
+    # eframe/glow → OpenGL → llvmpipe (CPU). See tools/winpe-inject-deps.ps1.
+    [string]$MesaDir = (Join-Path $PSScriptRoot 'mesa')
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,13 +112,10 @@ if (-not (Test-Path $mountDir)) {
 
 Mount-WindowsImage -ImagePath $bootWim -Index 1 -Path $mountDir
 
-# --- Inject agent binary ---
+# --- Inject agent binary + its DLL closure + Mesa3D llvmpipe ---
 
-Write-Host "[3/6] Injecting imaging agent..." -ForegroundColor Yellow
-
-$agentDest = Join-Path $mountDir "Windows\System32"
-Copy-Item -Path $AgentPath -Destination (Join-Path $agentDest "imaging-agent.exe") -Force
-Write-Host "  Copied imaging-agent.exe to WinPE System32"
+Write-Host "[3/6] Injecting imaging agent, DLL closure, and Mesa3D..." -ForegroundColor Yellow
+& "$PSScriptRoot\winpe-inject-deps.ps1" -MountDir $mountDir -AgentPath $AgentPath -MesaDir $MesaDir
 
 # --- Create startnet.cmd ---
 
@@ -128,6 +130,10 @@ echo ============================================
 echo   DeployStation - Windows Imaging Agent
 echo ============================================
 echo.
+
+REM Force Mesa3D to use its llvmpipe software renderer directly; skips the failed
+REM ZINK/Vulkan probe that prints a harmless but confusing error on startup.
+set GALLIUM_DRIVER=llvmpipe
 
 REM Map capture share if config exists
 if exist X:\imaging\config.json (

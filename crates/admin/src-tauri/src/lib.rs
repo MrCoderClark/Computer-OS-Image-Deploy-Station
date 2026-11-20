@@ -344,6 +344,28 @@ fn find_agent_binary() -> Result<std::path::PathBuf, String> {
     Err("imaging-agent.exe not found. Build it first: cargo build --release -p imaging-agent".into())
 }
 
+fn find_tools_dir() -> Result<std::path::PathBuf, String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let mut cur = dir;
+        for _ in 0..6 {
+            candidates.push(cur.join("tools"));
+            if !cur.pop() { break; }
+        }
+    }
+    candidates.push(std::path::PathBuf::from("tools"));
+    candidates.push(std::path::PathBuf::from(r"..\..\..\tools"));
+
+    for c in &candidates {
+        if c.join("winpe-inject-deps.ps1").exists() {
+            let resolved = c.canonicalize().unwrap_or_else(|_| c.clone());
+            tracing::info!("tools/ dir: {}", resolved.display());
+            return Ok(resolved);
+        }
+    }
+    Err("tools/ directory with winpe-inject-deps.ps1 not found.".into())
+}
+
 fn is_running_elevated() -> bool {
     run_ps("([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)")
         .map(|s| s.trim().eq_ignore_ascii_case("true"))
@@ -507,46 +529,38 @@ async fn build_media(request: MediaBuildRequest, app: tauri::AppHandle) -> Resul
             "Mount-WindowsImage -ImagePath '{boot_wim}' -Index 1 -Path '{mount_dir}' -ErrorAction Stop"
         )).map_err(|e| format!("Failed to mount boot.wim: {e}"))?;
 
-        // Copy agent binary
-        let agent_dest = format!(r"{mount_dir}\Windows\System32\imaging-agent.exe");
-        std::fs::copy(&agent_path, &agent_dest)
-            .map_err(|e| format!("Failed to copy agent binary: {e}"))?;
-        tracing::info!("Agent injected into boot.wim");
+        // Delegate agent copy + full DLL closure walk + Mesa3D llvmpipe install to
+        // the shared PowerShell helper. WinPE lacks a GPU driver, so the agent
+        // (eframe/glow → OpenGL) needs Mesa's software renderer, plus every
+        // transitive static import the agent brings in.
+        //
+        // The tools/ directory is next to the agent binary's source tree. In
+        // `cargo tauri dev` the CWD is the workspace root, so relative paths
+        // resolve. For a packaged release build these resources will need to be
+        // bundled via tauri.conf.json — TODO when we ship the installer.
+        emit("winpe", 50, "Injecting agent, DLL closure, and Mesa3D...");
 
-        // Inject graphics DLLs required by egui (not present in WinPE by default)
-        emit("winpe", 50, "Injecting graphics DLLs...");
-        let sys32 = r"C:\Windows\System32";
-        let dlls_to_inject = [
-            "api-ms-win-core-synch-l1-2-0.dll",
-        ];
-        let dll_search_dirs = [
-            sys32.to_string(),
-            format!(r"{sys32}\downlevel"),
-        ];
-        for dll in &dlls_to_inject {
-            let dst = format!(r"{mount_dir}\Windows\System32\{dll}");
-            if std::path::Path::new(&dst).exists() {
-                tracing::info!("{dll} already in WinPE — skipping");
-                continue;
-            }
-            let mut found = false;
-            for dir in &dll_search_dirs {
-                let src = format!(r"{dir}\{dll}");
-                if std::path::Path::new(&src).exists() {
-                    match std::fs::copy(&src, &dst) {
-                        Ok(_) => {
-                            tracing::info!("Injected {dll} from {dir} into boot.wim");
-                            found = true;
-                            break;
-                        }
-                        Err(e) => tracing::warn!("Could not inject {dll} from {dir}: {e}"),
-                    }
-                }
-            }
-            if !found {
-                tracing::warn!("{dll} not found on host — skipping");
-            }
+        let tools_dir = find_tools_dir()?;
+        let inject_script = tools_dir.join("winpe-inject-deps.ps1");
+        let mesa_dir = tools_dir.join("mesa");
+        if !inject_script.exists() {
+            return Err(format!("Injector script missing: {}", inject_script.display()));
         }
+        if !mesa_dir.join("opengl32.dll").exists() {
+            return Err(format!(
+                "Mesa3D DLLs missing at {}. Download the x64 release-msvc build \
+                 from https://github.com/pal1000/mesa-dist-win/releases and copy \
+                 x64\\opengl32.dll + x64\\libgallium_wgl.dll into that folder.",
+                mesa_dir.display()
+            ));
+        }
+        run_ps(&format!(
+            "& '{}' -MountDir '{mount_dir}' -AgentPath '{}' -MesaDir '{}'",
+            inject_script.to_string_lossy(),
+            agent_path.to_string_lossy(),
+            mesa_dir.to_string_lossy()
+        )).map_err(|e| format!("Agent/DLL injection failed: {e}"))?;
+        tracing::info!("Agent + DLL closure + Mesa3D injected into boot.wim");
 
         // Write startnet.cmd with diagnostics on failure
         emit("winpe", 55, "Configuring WinPE startup...");
@@ -559,6 +573,9 @@ echo ============================================\r\n\
 echo   DeployStation - Windows Imaging Agent\r\n\
 echo ============================================\r\n\
 echo.\r\n\
+REM Force Mesa3D to use its llvmpipe software renderer directly; skips the\r\n\
+REM failed ZINK/Vulkan probe that prints a harmless error at startup.\r\n\
+set GALLIUM_DRIVER=llvmpipe\r\n\
 echo SystemRoot = %SystemRoot%\r\n\
 echo Starting agent...\r\n\
 imaging-agent.exe\r\n\
@@ -569,7 +586,7 @@ if %AGENT_EXIT% NEQ 0 (\r\n\
     echo.\r\n\
     echo --- Diagnostics ---\r\n\
     echo Checking DLLs in %SystemRoot%\\System32:\r\n\
-    for %%D in (opengl32.dll dwmapi.dll imm32.dll shcore.dll uxtheme.dll dbghelp.dll bcryptprimitives.dll crypt32.dll secur32.dll oleaut32.dll shlwapi.dll uiautomationcore.dll user32.dll gdi32.dll kernel32.dll ntdll.dll api-ms-win-core-synch-l1-2-0.dll) do (\r\n\
+    for %%D in (opengl32.dll libgallium_wgl.dll dwmapi.dll imm32.dll uxtheme.dll bcryptprimitives.dll crypt32.dll secur32.dll shlwapi.dll shell32.dll ole32.dll user32.dll gdi32.dll gdi32full.dll kernel32.dll ntdll.dll vcruntime140.dll vcruntime140_1.dll msvcp140.dll api-ms-win-core-synch-l1-2-0.dll) do (\r\n\
         if exist %SystemRoot%\\System32\\%%D (echo   %%D ... OK) else (echo   %%D ... MISSING)\r\n\
     )\r\n\
     echo.\r\n\

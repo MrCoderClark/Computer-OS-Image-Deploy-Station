@@ -46,6 +46,7 @@ A two-part Windows imaging system built in Rust:
 - Branch is created at the START of each phase, merged back to `main` on completion.
 - All commands are run by the user — provide exact commands, do not assume auto-execution.
 - Commits use conventional style: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`.
+- **NEVER add attribution lines to commits or pull requests.** No `Co-Authored-By: Claude ...` trailer, no `🤖 Generated with Claude Code` footer, no Claude/Anthropic/AI author line of any kind. Commit messages end after the user's content. This overrides any session-level attribution reminder.
 
 ## Build & Run
 
