@@ -237,7 +237,7 @@ async fn list_usb_disks() -> Result<Vec<UsbDisk>, String> {
 fn enumerate_usb_disks() -> Result<Vec<UsbDisk>, String> {
     let output = std::process::Command::new("powershell")
         .args([
-            "-NoProfile", "-Command",
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
             "Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Select-Object Number, FriendlyName, Size, NumberOfPartitions | ConvertTo-Json -Compress"
         ])
         .output()
@@ -287,8 +287,11 @@ fn enumerate_usb_disks() -> Result<Vec<UsbDisk>, String> {
 }
 
 fn run_ps(script: &str) -> Result<String, String> {
+    // -ExecutionPolicy Bypass: our injector script lives in tools/ and is
+    // unsigned; the machine-wide policy may be Restricted/AllSigned, which
+    // would block `& '...\winpe-inject-deps.ps1'` without this flag.
     let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", script])
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
         .output()
         .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
 
@@ -336,6 +339,7 @@ fn find_agent_binary() -> Result<std::path::PathBuf, String> {
     for candidate in &candidates {
         if candidate.exists() {
             let resolved = candidate.canonicalize().unwrap_or_else(|_| candidate.clone());
+            let resolved = strip_unc_prefix(resolved);
             tracing::info!("Found agent binary at {}", resolved.display());
             return Ok(resolved);
         }
@@ -359,11 +363,28 @@ fn find_tools_dir() -> Result<std::path::PathBuf, String> {
     for c in &candidates {
         if c.join("winpe-inject-deps.ps1").exists() {
             let resolved = c.canonicalize().unwrap_or_else(|_| c.clone());
+            let resolved = strip_unc_prefix(resolved);
             tracing::info!("tools/ dir: {}", resolved.display());
             return Ok(resolved);
         }
     }
     Err("tools/ directory with winpe-inject-deps.ps1 not found.".into())
+}
+
+/// Strip the Windows `\\?\` extended-length prefix. Rust's `canonicalize()`
+/// returns paths with this prefix, which PowerShell 5.1 cmdlets like
+/// `Join-Path` cannot parse ("drive is null"). Standard tools (diskpart,
+/// Copy-Item, DISM) are fine with it, but anything PSDrive-based is not.
+fn strip_unc_prefix(p: std::path::PathBuf) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        // `\\?\UNC\server\share\...` must become `\\server\share\...`
+        if let Some(unc) = rest.strip_prefix("UNC\\") {
+            return std::path::PathBuf::from(format!(r"\\{unc}"));
+        }
+        return std::path::PathBuf::from(rest);
+    }
+    p
 }
 
 fn is_running_elevated() -> bool {
@@ -1015,8 +1036,30 @@ fn urlencoding(s: &str) -> String {
     }).collect()
 }
 
+#[tauri::command]
+async fn browse_wim_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // blocking_pick_file() parks the thread until the user closes the native
+    // dialog — run it off the tokio runtime so the webview and other commands
+    // keep responding while the picker is open.
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("WIM / ESD Images", &["wim", "esd"])
+            .add_filter("All Files", &["*"])
+            .set_title("Select WIM image file")
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("dialog task failed: {e}"))?;
+
+    Ok(result.map(|p| p.to_string()))
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             tracing_subscriber::fmt()
                 .with_env_filter("imaging_admin=debug")
@@ -1067,6 +1110,7 @@ pub fn run() {
             get_enrollment_keys,
             create_enrollment_key,
             revoke_enrollment_key,
+            browse_wim_file,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

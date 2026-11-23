@@ -50,6 +50,7 @@ A two-part Windows imaging system built in Rust:
 
 ## Build & Run
 
+- **First-time setup on a fresh clone:** `.\tools\setup-dev.ps1` — installs cargo-tauri, downloads Mesa3D into `tools/mesa/`, verifies Windows ADK. Idempotent; safe to re-run with `-Force`.
 - Admin app: `cargo tauri dev` (development), `cargo tauri build` (release)
 - Agent: `cargo build --release --target x86_64-pc-windows-msvc` (must be tested in real WinPE, not desktop)
 - Server: `cargo run -p imaging-server`
