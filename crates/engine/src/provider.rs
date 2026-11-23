@@ -149,6 +149,7 @@ mod tests {
                 discovery: DiscoveryMethod::Fixed,
                 host: Some("10.0.0.1".into()),
                 port: 7443,
+                cert_pem: None,
             }),
         };
         SuiteConfig {

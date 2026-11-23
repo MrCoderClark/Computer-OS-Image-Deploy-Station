@@ -102,6 +102,11 @@ pub struct ServerConfig {
     pub host: Option<String>,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// PEM-encoded server certificate the agent is pinned to. Required for
+    /// strict TLS; when absent the agent falls back to accept-any-cert with
+    /// a loud warning (same behavior as Phase 17).
+    #[serde(default)]
+    pub cert_pem: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -169,6 +174,7 @@ mod tests {
                 discovery: DiscoveryMethod::Fixed,
                 host: Some("10.0.0.1".into()),
                 port: 7443,
+                cert_pem: None,
             }),
             capture_target: None,
             image: None,
@@ -207,6 +213,7 @@ mod tests {
                 discovery: DiscoveryMethod::Fixed,
                 host: Some("10.0.0.1".into()),
                 port: 7443,
+                cert_pem: None,
             }),
             capture_target: None,
             image: Some(ImageMeta {

@@ -8,18 +8,31 @@ pub struct ServerClient {
 }
 
 impl ServerClient {
-    pub fn new(host: &str, port: u16) -> Self {
-        // TLS: the server uses a self-signed cert by default. For now the
-        // agent accepts any cert so the control channel is at least encrypted
-        // against passive sniffing. Strict fingerprint pinning lands in the
-        // next phase (Phase 18) once the enrollment key carries the expected
-        // fingerprint from the admin.
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .danger_accept_invalid_certs(true)
-            .build()
-            .expect("failed to build HTTP client");
-        tracing::warn!("TLS verification disabled on control channel (self-signed cert); pinning pending Phase 18");
+    /// Create a new client. When `cert_pem` is supplied (from the suite
+    /// config), the agent pins to that exact cert as its sole trust anchor.
+    /// When it is absent, the agent falls back to accept-any-cert with a
+    /// loud warning (Phase 17 behavior; only acceptable for first-boot
+    /// bootstrap on a trusted LAN).
+    pub fn new(host: &str, port: u16, cert_pem: Option<&str>) -> Self {
+        let mut builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10));
+        builder = match cert_pem {
+            Some(pem) => match reqwest::Certificate::from_pem(pem.as_bytes()) {
+                Ok(cert) => {
+                    tracing::info!("TLS pinned to server cert from suite config");
+                    builder.add_root_certificate(cert)
+                }
+                Err(e) => {
+                    tracing::error!("Pinned cert_pem in suite config failed to parse ({e}); falling back to accept-any");
+                    builder.danger_accept_invalid_certs(true)
+                }
+            },
+            None => {
+                tracing::warn!("No pinned cert in suite config; TLS verification DISABLED. Rebuild USB after `trust_server` in admin to enable pinning.");
+                builder.danger_accept_invalid_certs(true)
+            }
+        };
+        let http = builder.build().expect("failed to build HTTP client");
         Self {
             http,
             base_url: format!("https://{host}:{port}"),

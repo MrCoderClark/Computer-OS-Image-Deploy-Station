@@ -53,9 +53,28 @@ Print the cert's SHA-256 fingerprint:
 & "$env:ProgramFiles\DeployStation\imaging-server.exe" fingerprint
 ```
 
-Clients (admin app, WinPE agent) currently accept any cert on the control
-channel so the connection is at least encrypted. Fingerprint pinning for
-strict verification lands in Phase 18.
+### Pinning (Phase 18)
+
+By default clients don't verify the self-signed cert, so an attacker on
+the network could MITM the connection. To fix that, pin each client to
+the exact cert:
+
+1. On the server host, print the cert fingerprint and compare out-of-band:
+   ```powershell
+   & "$env:ProgramFiles\DeployStation\imaging-server.exe" fingerprint
+   ```
+2. In the admin app: **Settings &rarr; Server Trust &rarr; Trust current
+   server**. The dialog shows the fingerprint; verify it matches, then
+   confirm. The cert is persisted in the admin database.
+3. Every USB built from here on bakes that same cert into the suite config
+   under `[server] cert_pem`, so the WinPE agent pins to it automatically.
+4. Hit **Forget** to stop pinning (new USBs lose the pin; existing USBs
+   are unaffected).
+
+Pinned verification uses `rustls`' trust-store semantics with the single
+self-signed cert as the sole root. The SAN must match the hostname the
+client connects to (the cert ships SANs for `localhost`, `127.0.0.1`,
+`::1`, and `COMPUTERNAME`); use a matching name or regenerate the cert.
 
 To replace the auto-generated cert with your own (public CA-issued or
 enterprise PKI), overwrite `server.crt` / `server.key` and restart the

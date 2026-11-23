@@ -366,17 +366,18 @@ async fn connect_to_server(
     machine_name: &str,
     tx: mpsc::UnboundedSender<NetworkEvent>,
 ) {
-    let (host, port) = match &server_config {
+    let (host, port, cert_pem) = match &server_config {
         Some(sc) => (
             sc.host.as_deref().unwrap_or("127.0.0.1"),
             sc.port,
+            sc.cert_pem.as_deref(),
         ),
-        None => ("127.0.0.1", 7443),
+        None => ("127.0.0.1", 7443, None),
     };
 
     tracing::info!("Connecting to server at {host}:{port}...");
 
-    let mut client = crate::client::ServerClient::new(host, port);
+    let mut client = crate::client::ServerClient::new(host, port, cert_pem);
 
     tracing::debug!("Checking server health...");
     match client.health().await {
