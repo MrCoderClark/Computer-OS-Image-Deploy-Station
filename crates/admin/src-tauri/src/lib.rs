@@ -74,7 +74,7 @@ async fn get_images(state: tauri::State<'_, AppConfig>) -> Result<Vec<ImageEntry
 }
 
 async fn fetch_images_from_server(config: &AppConfig) -> anyhow::Result<Vec<ImageEntry>> {
-    let client = server_client()
+    let client = server_client(config.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
@@ -116,7 +116,17 @@ async fn fetch_images_from_server(config: &AppConfig) -> anyhow::Result<Vec<Imag
 }
 
 #[tauri::command]
-fn build_config(request: ConfigBuildRequest) -> Result<String, String> {
+fn build_config(
+    request: ConfigBuildRequest,
+    state: tauri::State<'_, AppConfig>,
+) -> Result<String, String> {
+    build_config_inner(request, state.pinned_cert())
+}
+
+fn build_config_inner(
+    request: ConfigBuildRequest,
+    pinned_cert: Option<String>,
+) -> Result<String, String> {
     let mode: OperatingMode = serde_json::from_value(
         serde_json::Value::String(request.mode.clone()),
     )
@@ -129,10 +139,15 @@ fn build_config(request: ConfigBuildRequest) -> Result<String, String> {
         )
         .map_err(|_| format!("Invalid discovery method: {discovery_str}"))?;
 
+        // Bake the currently-trusted server cert into the suite config so
+        // the WinPE agent pins to the same cert the admin trusts. Written
+        // every time; if no cert is trusted yet, the agent falls back to
+        // accept-any-cert with a warning (matches Phase 17 behavior).
         Some(ServerConfig {
             discovery,
             host: request.server_host.clone(),
             port: request.server_port.unwrap_or(7443),
+            cert_pem: pinned_cert.clone(),
         })
     } else {
         None
@@ -525,7 +540,8 @@ fn is_running_elevated() -> bool {
 
 #[tauri::command]
 async fn build_media(request: MediaBuildRequest, app: tauri::AppHandle) -> Result<String, String> {
-    let config_json = build_config(ConfigBuildRequest {
+    let pinned_cert = app.state::<AppConfig>().pinned_cert();
+    let config_json = build_config_inner(ConfigBuildRequest {
         mode: request.mode.clone(),
         server_host: request.server_host,
         server_port: request.server_port,
@@ -535,7 +551,7 @@ async fn build_media(request: MediaBuildRequest, app: tauri::AppHandle) -> Resul
         capture_unc_path: request.capture_unc_path,
         capture_account: request.capture_account,
         enrollment_key: request.enrollment_key,
-    })?;
+    }, pinned_cert)?;
 
     let disk_number = request.disk_number;
     let mode = request.mode.clone();
@@ -798,14 +814,45 @@ struct AppConfig {
     server_host: String,
     server_port: u16,
     hostname: String,
+    /// PEM of the server cert the user has trusted. When set, the client
+    /// pins to it via rustls' trust store; when `None`, the client accepts
+    /// any cert (fallback for first-trust bootstrap and dev).
+    pinned_cert_pem: std::sync::Arc<std::sync::RwLock<Option<String>>>,
 }
 
-/// Builder for talking to imaging-server over HTTPS. The server uses a
-/// self-signed cert; we accept any cert for now. Fingerprint pinning is
-/// Phase 18.
-fn server_client() -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+const SETTING_PINNED_CERT: &str = "pinned_server_cert_pem";
+
+impl AppConfig {
+    /// Snapshot the currently-trusted server cert PEM (if any) for use
+    /// in a single HTTP request.
+    fn pinned_cert(&self) -> Option<String> {
+        self.pinned_cert_pem.read().ok().and_then(|g| g.clone())
+    }
+}
+
+/// Builder for talking to imaging-server over HTTPS.
+///
+/// - With a pinned cert: `add_root_certificate` + strict validation.
+///   Rustls treats the server's self-signed cert as its own trust anchor
+///   and still checks the SAN against the connected hostname.
+/// - Without a pinned cert: accept any cert with a loud warning. Used
+///   for the first-trust bootstrap (/cert) and dev. Pinning is set up
+///   via the `trust_server` Tauri command.
+fn server_client(pinned_cert_pem: Option<&str>) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    match pinned_cert_pem {
+        Some(pem) => match reqwest::Certificate::from_pem(pem.as_bytes()) {
+            Ok(cert) => builder.add_root_certificate(cert),
+            Err(e) => {
+                tracing::error!("pinned cert PEM failed to parse ({e}); falling back to accept-any");
+                builder.danger_accept_invalid_certs(true)
+            }
+        },
+        None => {
+            tracing::warn!("No pinned server cert; TLS verification disabled on this request");
+            builder.danger_accept_invalid_certs(true)
+        }
+    }
 }
 
 fn server_base_url(host: &str, port: u16) -> String {
@@ -1013,7 +1060,7 @@ pub struct DeployJobEntry {
 
 #[tauri::command]
 async fn get_deploy_jobs(state: tauri::State<'_, AppConfig>) -> Result<Vec<DeployJobEntry>, String> {
-    let client = server_client()
+    let client = server_client(state.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1053,7 +1100,7 @@ pub struct AuditEntryJs {
 
 #[tauri::command]
 async fn get_audit_log(state: tauri::State<'_, AppConfig>, search: Option<String>, level: Option<String>) -> Result<Vec<AuditEntryJs>, String> {
-    let client = server_client()
+    let client = server_client(state.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1088,7 +1135,7 @@ async fn get_audit_log(state: tauri::State<'_, AppConfig>, search: Option<String
 
 #[tauri::command]
 async fn export_audit_csv(state: tauri::State<'_, AppConfig>) -> Result<String, String> {
-    let client = server_client()
+    let client = server_client(state.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1117,7 +1164,7 @@ async fn export_audit_csv(state: tauri::State<'_, AppConfig>) -> Result<String, 
 
 #[tauri::command]
 async fn get_enrollment_keys(state: tauri::State<'_, AppConfig>) -> Result<Vec<KeyListEntry>, String> {
-    let client = server_client()
+    let client = server_client(state.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1135,7 +1182,7 @@ async fn get_enrollment_keys(state: tauri::State<'_, AppConfig>) -> Result<Vec<K
 
 #[tauri::command]
 async fn create_enrollment_key(state: tauri::State<'_, AppConfig>, label: String, expires_in_days: u32) -> Result<CreateKeyResponse, String> {
-    let client = server_client()
+    let client = server_client(state.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1154,7 +1201,7 @@ async fn create_enrollment_key(state: tauri::State<'_, AppConfig>, label: String
 
 #[tauri::command]
 async fn revoke_enrollment_key(state: tauri::State<'_, AppConfig>, id: String) -> Result<(), String> {
-    let client = server_client()
+    let client = server_client(state.pinned_cert().as_deref())
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1176,6 +1223,124 @@ fn urlencoding(s: &str) -> String {
         '=' => "%3D".to_string(),
         _ => c.to_string(),
     }).collect()
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerCertInfo {
+    pub pem: String,
+    pub fingerprint_sha256: String,
+}
+
+/// Fetch the server's self-signed TLS cert and its SHA-256 fingerprint.
+/// Verification is skipped (we have no trust yet); the admin UI then shows
+/// the fingerprint and the user confirms out-of-band before calling
+/// `trust_server`.
+#[tauri::command]
+async fn fetch_server_cert(host: String, port: u16) -> Result<ServerCertInfo, String> {
+    let base = server_base_url(&host, port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let pem: String = client
+        .get(format!("{base}/cert"))
+        .send().await.map_err(|e| format!("reach server: {e}"))?
+        .error_for_status().map_err(|e| e.to_string())?
+        .text().await.map_err(|e| e.to_string())?;
+
+    // Compute the fingerprint locally so the UI doesn't trust an attacker's
+    // /fingerprint response -- we derive it from the actual PEM we'll pin.
+    use sha2::{Digest, Sha256};
+    let mut reader = std::io::BufReader::new(pem.as_bytes());
+    let cert_der = rustls_pemfile::certs(&mut reader)
+        .next()
+        .ok_or_else(|| "no certificate in /cert response".to_string())?
+        .map_err(|e| format!("parse PEM: {e}"))?;
+    let digest = Sha256::digest(cert_der.as_ref());
+    let hex = hex::encode_upper(digest);
+    let fp: String = (0..hex.len()).step_by(2)
+        .map(|i| hex[i..i+2].to_string())
+        .collect::<Vec<_>>()
+        .join(":");
+
+    Ok(ServerCertInfo { pem, fingerprint_sha256: fp })
+}
+
+/// Persist the server cert PEM as the trusted one for all future requests.
+/// Expects `expected_fingerprint` to match what the user agreed to in the UI
+/// (verified again here so a race between fetch_server_cert and trust_server
+/// can't swap a different cert in).
+#[tauri::command]
+async fn trust_server(
+    pem: String,
+    expected_fingerprint: String,
+    state: tauri::State<'_, AppConfig>,
+    db: tauri::State<'_, DbStore>,
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let mut reader = std::io::BufReader::new(pem.as_bytes());
+    let cert_der = rustls_pemfile::certs(&mut reader)
+        .next()
+        .ok_or_else(|| "pem contains no certificate".to_string())?
+        .map_err(|e| format!("parse PEM: {e}"))?;
+    let digest = Sha256::digest(cert_der.as_ref());
+    let hex = hex::encode_upper(digest);
+    let actual: String = (0..hex.len()).step_by(2)
+        .map(|i| hex[i..i+2].to_string())
+        .collect::<Vec<_>>()
+        .join(":");
+    if actual.eq_ignore_ascii_case(&expected_fingerprint) == false {
+        return Err(format!("fingerprint mismatch: cert is {actual}, UI expected {expected_fingerprint}"));
+    }
+
+    let db_lock = db.0.lock().await;
+    db_lock.set_setting(SETTING_PINNED_CERT, &pem)
+        .map_err(|e| format!("persist cert: {e}"))?;
+
+    if let Ok(mut w) = state.pinned_cert_pem.write() {
+        *w = Some(pem);
+    }
+    tracing::info!("Trusted server cert with fingerprint {actual}");
+    Ok(())
+}
+
+/// Return the fingerprint of the currently-trusted server cert, if any.
+#[tauri::command]
+async fn get_trusted_server_fingerprint(state: tauri::State<'_, AppConfig>) -> Result<Option<String>, String> {
+    let pem = match state.pinned_cert() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    use sha2::{Digest, Sha256};
+    let mut reader = std::io::BufReader::new(pem.as_bytes());
+    let cert_der = rustls_pemfile::certs(&mut reader)
+        .next()
+        .ok_or_else(|| "stored pem invalid".to_string())?
+        .map_err(|e| format!("parse PEM: {e}"))?;
+    let digest = Sha256::digest(cert_der.as_ref());
+    let hex = hex::encode_upper(digest);
+    let fp: String = (0..hex.len()).step_by(2)
+        .map(|i| hex[i..i+2].to_string())
+        .collect::<Vec<_>>()
+        .join(":");
+    Ok(Some(fp))
+}
+
+/// Forget the trusted cert; next request will fall back to accept-any-cert.
+#[tauri::command]
+async fn forget_trusted_server(
+    state: tauri::State<'_, AppConfig>,
+    db: tauri::State<'_, DbStore>,
+) -> Result<(), String> {
+    let db_lock = db.0.lock().await;
+    db_lock.set_setting(SETTING_PINNED_CERT, "")
+        .map_err(|e| format!("clear setting: {e}"))?;
+    if let Ok(mut w) = state.pinned_cert_pem.write() {
+        *w = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1213,17 +1378,28 @@ pub fn run() {
                 .map(|h| h.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "admin".into());
 
-            app.manage(AppConfig {
-                server_host: "127.0.0.1".into(),
-                server_port: 7443,
-                hostname,
-            });
-
             let app_data = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&app_data).ok();
             let db_path = app_data.join("deploystation.db");
             let admin_db = db::AdminDb::open(&db_path)
                 .expect("Failed to open admin database");
+
+            let pinned_pem = admin_db
+                .get_setting(SETTING_PINNED_CERT)
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            if pinned_pem.is_some() {
+                tracing::info!("Loaded pinned server cert from admin database");
+            }
+
+            app.manage(AppConfig {
+                server_host: "127.0.0.1".into(),
+                server_port: 7443,
+                hostname,
+                pinned_cert_pem: std::sync::Arc::new(std::sync::RwLock::new(pinned_pem)),
+            });
+
             app.manage(DbStore(Arc::new(Mutex::new(admin_db))));
 
             Ok(())
@@ -1255,6 +1431,10 @@ pub fn run() {
             browse_wim_file,
             check_prerequisites,
             install_prerequisites,
+            fetch_server_cert,
+            trust_server,
+            get_trusted_server_fingerprint,
+            forget_trusted_server,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

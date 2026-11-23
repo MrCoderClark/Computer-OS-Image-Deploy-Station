@@ -17,6 +17,8 @@ use crate::state::AppState;
 pub fn api_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .route("/cert", get(server_cert))
+        .route("/fingerprint", get(server_fingerprint))
         .route("/api/auth", post(authenticate))
         .route("/api/images", get(list_images))
         .route("/api/images/{id}/download", get(download_image))
@@ -38,6 +40,29 @@ async fn health() -> Json<HealthResponse> {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     })
+}
+
+/// PEM-encoded server certificate. Unauthenticated: the cert is public
+/// information and MITM resistance comes from the admin confirming the
+/// fingerprint out-of-band before trusting the response.
+async fn server_cert(
+    State(state): State<AppState>,
+) -> Result<(axum::http::HeaderMap, String), (StatusCode, String)> {
+    let pem = state.tls_cert_pem.clone()
+        .ok_or((StatusCode::NOT_FOUND, "TLS disabled on this server".into()))?;
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::CONTENT_TYPE, "application/x-pem-file".parse().unwrap());
+    Ok((headers, pem))
+}
+
+/// SHA-256 fingerprint of the server cert (colon-separated hex). Admin
+/// displays this at first-trust and the user verifies it out-of-band.
+async fn server_fingerprint(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let fp = state.tls_fingerprint.clone()
+        .ok_or((StatusCode::NOT_FOUND, "TLS disabled on this server".into()))?;
+    Ok(Json(serde_json::json!({ "sha256": fp })))
 }
 
 async fn authenticate(

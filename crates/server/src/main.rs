@@ -97,7 +97,18 @@ where
     }
 
     let database = db::Database::open(&cfg.db_path)?;
-    let app_state = state::AppState::new(database);
+    let mut app_state = state::AppState::new(database);
+
+    // Load the TLS cert ONCE: used for both the listener and
+    // /cert + /fingerprint route responses. `None` when TLS is off.
+    let cert_files = if cfg.tls.enabled {
+        let files = tls::load_or_generate(&cfg.tls.cert_path, &cfg.tls.key_path)?;
+        let pem = std::fs::read_to_string(&files.cert_path)?;
+        app_state = app_state.with_tls(pem, files.fingerprint_sha256.clone());
+        Some(files)
+    } else {
+        None
+    };
 
     let needs_seed = {
         let db = app_state.db.lock().await;
@@ -124,9 +135,8 @@ where
         handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
     });
 
-    if cfg.tls.enabled {
+    if let Some(cert) = cert_files {
         use axum_server::tls_rustls::RustlsConfig;
-        let cert = tls::load_or_generate(&cfg.tls.cert_path, &cfg.tls.key_path)?;
         let rustls_cfg = RustlsConfig::from_pem_file(&cert.cert_path, &cert.key_path).await?;
         info!("Imaging server listening on https://{addr} (db: {})", cfg.db_path.display());
         axum_server::bind_rustls(addr, rustls_cfg)

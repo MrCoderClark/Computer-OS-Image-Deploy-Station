@@ -11,6 +11,12 @@ use crate::db::{self, Database};
 pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub sessions: Arc<RwLock<HashMap<String, SessionClaims>>>,
+    /// PEM-encoded server cert (public bytes only) and its SHA-256
+    /// fingerprint. Populated when TLS is enabled; `None` when the server
+    /// runs in plain-HTTP mode. Exposed via /cert and /fingerprint so
+    /// admin clients can bootstrap pinning.
+    pub tls_cert_pem: Option<String>,
+    pub tls_fingerprint: Option<String>,
 }
 
 impl AppState {
@@ -18,7 +24,15 @@ impl AppState {
         Self {
             db: Arc::new(Mutex::new(db)),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            tls_cert_pem: None,
+            tls_fingerprint: None,
         }
+    }
+
+    pub fn with_tls(mut self, cert_pem: String, fingerprint: String) -> Self {
+        self.tls_cert_pem = Some(cert_pem);
+        self.tls_fingerprint = Some(fingerprint);
+        self
     }
 
     pub fn seed_sample_images(&self) {

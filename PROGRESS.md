@@ -266,9 +266,31 @@ back to the dev walk-up.
 
 ---
 
+### Phase 18: Server cert pinning (TOFU)
+**Branch:** `phase/18-cert-pinning`
+**Status:** In progress
+
+Goal: close Phase 17's "accept any cert" fallback with a trust-on-first-use
+flow. The admin trusts a server's self-signed cert out-of-band (user
+compares fingerprint), the trusted PEM is persisted and used for all
+future requests, and every USB built after that point bakes the cert into
+`[server].cert_pem` so WinPE agents pin to the same server.
+
+- [x] Server: public `GET /cert` (PEM) and `GET /fingerprint` (SHA-256 JSON) routes, backed by `AppState::with_tls` set at startup
+- [x] Common: `ServerConfig.cert_pem: Option<String>` field (`#[serde(default)]`, so existing suite configs keep parsing)
+- [x] Admin: `fetch_server_cert`, `trust_server`, `get_trusted_server_fingerprint`, `forget_trusted_server` Tauri commands; local-side fingerprint recomputation prevents a swapped cert between fetch and trust
+- [x] Admin: `server_client(pinned: Option<&str>)` adds root cert when present, falls back to accept-any with a warning otherwise; all 7 server-facing callsites updated
+- [x] Admin: Settings page has a "Server Trust (TLS pinning)" section with Trust / Forget buttons and a status line showing the pinned fingerprint
+- [x] Admin: `build_config_inner` bakes the trusted cert into `[server].cert_pem` for every USB built after the admin trusts a server
+- [x] Agent: `ServerClient::new(host, port, cert_pem)` pins when supplied by suite config; warns loudly and falls back to accept-any otherwise
+- [x] Docs: Pinning section added to `server-deployment.md` covering Trust / Forget / regenerate
+- [x] Verified: Trust flow in admin Settings works -- fingerprint dialog shows, confirm persists the cert, status line updates. WinPE-side pin verification pending the next media rebuild.
+
+---
+
 ### Phase 17: TLS for the control channel
 **Branch:** `phase/17-tls-control-channel`
-**Status:** In progress
+**Status:** Complete
 
 Goal: all server <-> admin and server <-> agent traffic is encrypted.
 Browser-style CA trust is a non-goal; pinning by cert fingerprint is the
