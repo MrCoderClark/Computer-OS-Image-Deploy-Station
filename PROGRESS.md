@@ -258,20 +258,24 @@ The agent exited with `STATUS_DLL_NOT_FOUND` (0xC0000135) because
 `vmconnect localhost 'WinPE-Agent-Test'`. Agent main window renders via
 software OpenGL (sluggish but correct).
 
-**Packaging TODO (deferred to installer phase):**
-- The admin app currently resolves `tools/winpe-inject-deps.ps1` and
-  `tools/mesa/` by walking up from the executable. For a released Tauri MSI,
-  these resources need bundling via `tauri.conf.json` and lookup via
-  `app.path().resource_dir()`.
+**Packaging** (resolved in Phase 14): `tools/winpe-inject-deps.ps1`,
+`tools/mesa/*.dll`, and `imaging-agent.exe` are bundled via
+`tauri.conf.json` `bundle.resources`; `find_tools_dir()` and
+`find_agent_binary()` try `app.path().resource_dir()` first and fall
+back to the dev walk-up.
 
 ---
 
-### Future: Installer & Packaging
-**Status:** TODO
+### Phase 14: Installer & Packaging
+**Branch:** `phase/14-installer-packaging`
+**Status:** In progress
 
-- [ ] Tauri MSI/NSIS installer for admin app (configure tauri.conf.json: app metadata, icons, bundle settings)
-- [ ] Server packaging (standalone .exe, optionally as a Windows Service)
-- [ ] Agent binary — no installer needed (embedded in WinPE boot media by build-winpe-media.ps1)
+- [x] Tauri MSI/NSIS installer for admin app (publisher/copyright/description metadata, resources map bundles tools/ + mesa/ + agent.exe, perMachine NSIS install)
+- [x] Admin runtime resolves bundled resources via `app.path().resource_dir()`
+- [ ] Verify `cargo tauri build` produces working MSI + NSIS installers
+- [ ] Install on a clean VM and run the build-media flow end-to-end from the installed app
+- [ ] Server packaging (standalone .exe via `cargo build --release -p imaging-server` — no installer, document deploy)
+- [x] Agent binary — no installer needed (bundled in admin installer AND embedded in WinPE boot media by build-winpe-media.ps1)
 
 ---
 

@@ -319,12 +319,17 @@ fn find_adk_path() -> Result<String, String> {
     Ok(default.to_string())
 }
 
-fn find_agent_binary() -> Result<std::path::PathBuf, String> {
+fn find_agent_binary(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    // Installed build: bundled next to the admin exe under resource_dir().
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("imaging-agent.exe"));
+    }
 
     if let Some(ref dir) = exe_dir {
         candidates.push(dir.join("imaging-agent.exe"));
@@ -348,8 +353,16 @@ fn find_agent_binary() -> Result<std::path::PathBuf, String> {
     Err("imaging-agent.exe not found. Build it first: cargo build --release -p imaging-agent".into())
 }
 
-fn find_tools_dir() -> Result<std::path::PathBuf, String> {
+fn find_tools_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    // 1. Installed build: Tauri's resource_dir() contains the bundled tools/.
+    //    See tauri.conf.json `bundle.resources`.
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("tools"));
+    }
+
+    // 2. Dev build: walk up from the exe looking for the repo's tools/.
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         let mut cur = dir;
         for _ in 0..6 {
@@ -431,7 +444,7 @@ async fn build_media(request: MediaBuildRequest, app: tauri::AppHandle) -> Resul
         let deploy_tools = format!(r"{adk_path}\Deployment Tools");
         let winpe_addon = format!(r"{adk_path}\Windows Preinstallation Environment");
 
-        let agent_path = find_agent_binary()?;
+        let agent_path = find_agent_binary(&app)?;
         tracing::info!("Agent binary: {}", agent_path.display());
 
         let needs_wim = mode == "offline" || mode == "hybrid";
@@ -561,7 +574,7 @@ async fn build_media(request: MediaBuildRequest, app: tauri::AppHandle) -> Resul
         // bundled via tauri.conf.json — TODO when we ship the installer.
         emit("winpe", 50, "Injecting agent, DLL closure, and Mesa3D...");
 
-        let tools_dir = find_tools_dir()?;
+        let tools_dir = find_tools_dir(&app)?;
         let inject_script = tools_dir.join("winpe-inject-deps.ps1");
         let mesa_dir = tools_dir.join("mesa");
         if !inject_script.exists() {

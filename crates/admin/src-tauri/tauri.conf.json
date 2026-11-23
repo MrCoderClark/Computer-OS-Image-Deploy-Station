@@ -25,11 +25,33 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi", "nsis"],
+    "publisher": "DeployStation",
+    "copyright": "Copyright (c) 2026 DeployStation",
+    "category": "DeveloperTool",
+    "shortDescription": "Windows Imaging Suite - capture, build, and deploy Windows images.",
+    "longDescription": "DeployStation admin application: image library, WinPE boot media builder, and deployment orchestrator. Requires elevation.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../../tools/winpe-inject-deps.ps1": "tools/winpe-inject-deps.ps1",
+      "../../../tools/build-winpe-media.ps1": "tools/build-winpe-media.ps1",
+      "../../../tools/sign-agent.ps1": "tools/sign-agent.ps1",
+      "../../../tools/mesa/opengl32.dll": "tools/mesa/opengl32.dll",
+      "../../../tools/mesa/libgallium_wgl.dll": "tools/mesa/libgallium_wgl.dll",
+      "../../../target/release/imaging-agent.exe": "imaging-agent.exe"
+    },
+    "windows": {
+      "wix": {
+        "language": ["en-US"]
+      },
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["English"]
+      }
+    }
   }
 }
