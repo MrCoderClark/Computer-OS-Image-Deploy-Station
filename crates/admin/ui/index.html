@@ -646,6 +646,34 @@
 </head>
 <body>
   <div class="toast-container" id="toast-container"></div>
+
+  <!-- First-run prerequisites installer. Shown by init() if ADK or WinPE add-on missing. -->
+  <div id="prereq-overlay" class="dialog-overlay" style="display:none">
+    <div class="dialog-box" style="max-width: 520px">
+      <h2 style="margin:0 0 8px;font-size:18px">One-time setup required</h2>
+      <p class="dialog-message" style="margin:0 0 16px">
+        DeployStation needs the Microsoft Windows ADK (Deployment Tools) and
+        Windows PE add-on to build boot media. Click <strong>Install</strong>
+        to download and install them from Microsoft automatically.
+      </p>
+      <ul id="prereq-list" style="list-style:none;padding:0;margin:0 0 20px;font-size:13px">
+        <li id="prereq-adk" style="padding:6px 0">
+          <span class="prereq-dot">&#9711;</span> Windows ADK (Deployment Tools)
+        </li>
+        <li id="prereq-winpe" style="padding:6px 0">
+          <span class="prereq-dot">&#9711;</span> WinPE add-on
+        </li>
+      </ul>
+      <div id="prereq-progress-box" style="display:none;margin:0 0 16px;padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--surface-border)">
+        <div id="prereq-stage" style="font-size:12px;color:var(--muted);margin-bottom:6px">Preparing...</div>
+        <div id="prereq-message" style="font-size:13px"></div>
+      </div>
+      <div class="dialog-actions">
+        <button id="prereq-cancel" class="btn">Skip for now</button>
+        <button id="prereq-install" class="btn btn-primary">Install</button>
+      </div>
+    </div>
+  </div>
   <div class="sidebar">
     <div class="sidebar-header">DeployStation</div>
     <div class="nav-item active" data-page="dashboard">Dashboard</div>
@@ -1238,7 +1266,69 @@
         document.getElementById('version').textContent = 'v' + version;
       } catch (e) {}
 
+      // First-run gate: block app until ADK + WinPE add-on are present
+      // (or user explicitly skips). Dashboard loads after.
+      await checkFirstRun();
+
       await Promise.all([loadDashboard(), loadImages()]);
+    }
+
+    async function checkFirstRun() {
+      let status;
+      try { status = await invoke('check_prerequisites'); }
+      catch (e) { console.error('prereq check failed', e); return; }
+
+      if (status.adk_installed && status.winpe_installed) return;
+
+      updatePrereqRow('prereq-adk',   status.adk_installed);
+      updatePrereqRow('prereq-winpe', status.winpe_installed);
+
+      const overlay = document.getElementById('prereq-overlay');
+      overlay.style.display = 'flex';
+
+      await new Promise(resolve => {
+        document.getElementById('prereq-cancel').onclick = () => {
+          overlay.style.display = 'none';
+          showToast('Build-media features will not work until prerequisites are installed.', 'info', 6000);
+          resolve();
+        };
+        document.getElementById('prereq-install').onclick = async () => {
+          const installBtn  = document.getElementById('prereq-install');
+          const cancelBtn   = document.getElementById('prereq-cancel');
+          const progressBox = document.getElementById('prereq-progress-box');
+          installBtn.disabled = true; installBtn.textContent = 'Installing...';
+          cancelBtn.disabled  = true;
+          progressBox.style.display = 'block';
+
+          const unlisten = await window.__TAURI__.event.listen('prereq-progress', (e) => {
+            document.getElementById('prereq-stage').textContent = e.payload.stage;
+            document.getElementById('prereq-message').textContent = e.payload.message;
+          });
+
+          try {
+            await invoke('install_prerequisites', {
+              installAdk:   !status.adk_installed,
+              installWinpe: !status.winpe_installed,
+            });
+            showToast('Prerequisites installed. DeployStation is ready.', 'success');
+            overlay.style.display = 'none';
+            resolve();
+          } catch (err) {
+            showToast('Install failed: ' + err, 'error', 8000);
+            installBtn.disabled = false; installBtn.textContent = 'Retry';
+            cancelBtn.disabled  = false;
+          } finally {
+            unlisten();
+          }
+        };
+      });
+    }
+
+    function updatePrereqRow(id, installed) {
+      const row = document.getElementById(id);
+      const dot = row.querySelector('.prereq-dot');
+      if (installed) { dot.textContent = '✔'; dot.style.color = 'var(--ok, #4ade80)'; }
+      else           { dot.textContent = '✕'; dot.style.color = 'var(--warn, #fbbf24)'; }
     }
 
     // Toast notification system
