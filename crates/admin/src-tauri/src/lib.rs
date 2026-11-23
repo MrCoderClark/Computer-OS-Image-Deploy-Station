@@ -319,6 +319,123 @@ fn find_adk_path() -> Result<String, String> {
     Ok(default.to_string())
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PrereqStatus {
+    pub adk_installed: bool,
+    pub winpe_installed: bool,
+    pub adk_path: Option<String>,
+}
+
+#[tauri::command]
+async fn check_prerequisites() -> PrereqStatus {
+    let base = r"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit";
+    let adk = std::path::Path::new(base).join("Deployment Tools").exists();
+    let winpe = std::path::Path::new(base).join("Windows Preinstallation Environment").exists();
+    PrereqStatus {
+        adk_installed: adk,
+        winpe_installed: winpe,
+        adk_path: if adk { Some(base.to_string()) } else { None },
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct PrereqProgress {
+    stage: String,  // "download-adk" | "install-adk" | "download-winpe" | "install-winpe" | "done"
+    message: String,
+}
+
+/// Download the ADK + WinPE bootstrappers from Microsoft and run them silently.
+/// The bootstrappers are small (~2MB each) but trigger Microsoft downloads of
+/// several GB during install. Progress is emitted as `prereq-progress` events;
+/// the actual install step is indeterminate (no parseable progress from adksetup).
+#[tauri::command]
+async fn install_prerequisites(
+    app: tauri::AppHandle,
+    install_adk: bool,
+    install_winpe: bool,
+) -> Result<(), String> {
+    // Microsoft fwlink IDs for the Windows 11, 24H2 ADK bootstrappers. Microsoft
+    // keeps these links current when they rev the ADK -- the fwlink itself is
+    // stable, it 302s to the current installer. See:
+    //   https://learn.microsoft.com/windows-hardware/get-started/adk-install
+    const ADK_URL:   &str = "https://go.microsoft.com/fwlink/?linkid=2289980";
+    const WINPE_URL: &str = "https://go.microsoft.com/fwlink/?linkid=2289981";
+
+    let emit = {
+        let app = app.clone();
+        move |stage: &str, message: &str| {
+            let _ = app.emit("prereq-progress", PrereqProgress {
+                stage: stage.into(),
+                message: message.into(),
+            });
+        }
+    };
+
+    let temp = std::env::temp_dir().join("deploystation-prereqs");
+    std::fs::create_dir_all(&temp).map_err(|e| format!("temp dir: {e}"))?;
+
+    if install_adk {
+        let exe = temp.join("adksetup.exe");
+        emit("download-adk", "Downloading Windows ADK bootstrapper...");
+        download_file(ADK_URL, &exe).await
+            .map_err(|e| format!("ADK download failed: {e}"))?;
+
+        emit("install-adk", "Installing Windows ADK (Deployment Tools). This downloads several hundred MB from Microsoft and may take 5-10 min...");
+        run_installer(&exe, &["/quiet", "/norestart", "/features", "OptionId.DeploymentTools"])
+            .await
+            .map_err(|e| format!("ADK install failed: {e}"))?;
+    }
+
+    if install_winpe {
+        let exe = temp.join("adkwinpesetup.exe");
+        emit("download-winpe", "Downloading WinPE add-on bootstrapper...");
+        download_file(WINPE_URL, &exe).await
+            .map_err(|e| format!("WinPE download failed: {e}"))?;
+
+        emit("install-winpe", "Installing WinPE add-on. This downloads ~2 GB from Microsoft and may take 10-15 min...");
+        run_installer(&exe, &["/quiet", "/norestart", "/features", "OptionId.WindowsPreinstallationEnvironment"])
+            .await
+            .map_err(|e| format!("WinPE install failed: {e}"))?;
+    }
+
+    emit("done", "Prerequisites installed. DeployStation is ready.");
+    Ok(())
+}
+
+async fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    let resp = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    std::fs::write(dest, &bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn run_installer(exe: &std::path::Path, args: &[&str]) -> Result<(), String> {
+    let exe = exe.to_path_buf();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let status = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&exe).args(&args).status()
+    })
+    .await
+    .map_err(|e| format!("spawn: {e}"))?
+    .map_err(|e| format!("exec: {e}"))?;
+    // adksetup exit codes: 0 = success, 3010 = success + reboot required.
+    match status.code() {
+        Some(0) | Some(3010) => Ok(()),
+        Some(c) => Err(format!("installer exited with code {c}")),
+        None => Err("installer terminated by signal".into()),
+    }
+}
+
 fn find_agent_binary(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -1124,6 +1241,8 @@ pub fn run() {
             create_enrollment_key,
             revoke_enrollment_key,
             browse_wim_file,
+            check_prerequisites,
+            install_prerequisites,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

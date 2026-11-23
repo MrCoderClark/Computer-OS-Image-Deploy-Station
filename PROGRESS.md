@@ -266,9 +266,25 @@ back to the dev walk-up.
 
 ---
 
+### Phase 15: First-run bootstrapper (ADK auto-install)
+**Branch:** `phase/15-first-run-bootstrap`
+**Status:** In progress
+
+Goal: the installed admin app should not require users to pre-install the
+Windows ADK. On launch, the app detects missing ADK / WinPE add-on and
+silently installs them from Microsoft's public bootstrappers.
+
+- [x] Backend: `check_prerequisites` command returns which ADK pieces are installed
+- [x] Backend: `install_prerequisites` downloads Microsoft's `adksetup.exe` + `adkwinpesetup.exe` (fwlink IDs 2289980 / 2289981) and runs them silently with `/features OptionId.DeploymentTools` and `OptionId.WindowsPreinstallationEnvironment`
+- [x] Frontend: first-run overlay blocks the app until install completes or user explicitly skips; progress is emitted as `prereq-progress` events
+- [x] Verified end-to-end on a clean machine (no ADK pre-installed): overlay fired, install ran, next launch skipped the prompt
+- [ ] Consider: silent MSI/offline install mode where the ADK layout is pre-staged in `resources/adk-layout/`
+
+---
+
 ### Phase 14: Installer & Packaging
 **Branch:** `phase/14-installer-packaging`
-**Status:** In progress
+**Status:** Complete
 
 - [x] Tauri MSI/NSIS installer for admin app (publisher/copyright/description metadata, resources map bundles tools/ + mesa/ + agent.exe, perMachine NSIS install)
 - [x] Admin runtime resolves bundled resources via `app.path().resource_dir()`
