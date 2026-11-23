@@ -37,7 +37,35 @@ Verify:
 
 ```powershell
 Get-Service DeployStationServer
-Invoke-WebRequest http://localhost:7443/health
+# -SkipCertificateCheck because the auto-generated cert is self-signed.
+Invoke-WebRequest https://localhost:7443/health -SkipCertificateCheck
+```
+
+## TLS
+
+The server is HTTPS by default. On first start it generates a self-signed
+cert at `%ProgramData%\DeployStation\tls\server.crt` (+ `server.key`),
+covering `localhost`, `127.0.0.1`, `::1`, and the machine's hostname.
+
+Print the cert's SHA-256 fingerprint:
+
+```powershell
+& "$env:ProgramFiles\DeployStation\imaging-server.exe" fingerprint
+```
+
+Clients (admin app, WinPE agent) currently accept any cert on the control
+channel so the connection is at least encrypted. Fingerprint pinning for
+strict verification lands in Phase 18.
+
+To replace the auto-generated cert with your own (public CA-issued or
+enterprise PKI), overwrite `server.crt` / `server.key` and restart the
+service.
+
+To disable TLS (plain HTTP) for development only, set in `server.toml`:
+
+```toml
+[tls]
+enabled = false
 ```
 
 ## Configure

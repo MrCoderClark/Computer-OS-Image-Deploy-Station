@@ -19,6 +19,36 @@ pub struct Config {
     pub log_filter: String,
     #[serde(default)]
     pub log_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub tls: TlsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// true = HTTPS with the cert at cert_path/key_path (auto-generated
+    /// self-signed if missing). false = plain HTTP.
+    #[serde(default = "TlsConfig::default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "TlsConfig::default_cert_path")]
+    pub cert_path: PathBuf,
+    #[serde(default = "TlsConfig::default_key_path")]
+    pub key_path: PathBuf,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled:   Self::default_enabled(),
+            cert_path: Self::default_cert_path(),
+            key_path:  Self::default_key_path(),
+        }
+    }
+}
+
+impl TlsConfig {
+    fn default_enabled() -> bool { true }
+    fn default_cert_path() -> PathBuf { PathBuf::from("tls").join("server.crt") }
+    fn default_key_path()  -> PathBuf { PathBuf::from("tls").join("server.key") }
 }
 
 impl Default for Config {
@@ -28,6 +58,7 @@ impl Default for Config {
             db_path:   Self::default_db_path(),
             log_filter: Self::default_log_filter(),
             log_dir: None,
+            tls: TlsConfig::default(),
         }
     }
 }
@@ -87,6 +118,12 @@ impl Config {
             if ld.is_relative() {
                 self.log_dir = Some(base.join(ld));
             }
+        }
+        if self.tls.cert_path.is_relative() {
+            self.tls.cert_path = base.join(&self.tls.cert_path);
+        }
+        if self.tls.key_path.is_relative() {
+            self.tls.key_path = base.join(&self.tls.key_path);
         }
     }
 

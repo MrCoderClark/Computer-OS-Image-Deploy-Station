@@ -9,12 +9,20 @@ pub struct ServerClient {
 
 impl ServerClient {
     pub fn new(host: &str, port: u16) -> Self {
+        // TLS: the server uses a self-signed cert by default. For now the
+        // agent accepts any cert so the control channel is at least encrypted
+        // against passive sniffing. Strict fingerprint pinning lands in the
+        // next phase (Phase 18) once the enrollment key carries the expected
+        // fingerprint from the admin.
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .danger_accept_invalid_certs(true)
+            .build()
+            .expect("failed to build HTTP client");
+        tracing::warn!("TLS verification disabled on control channel (self-signed cert); pinning pending Phase 18");
         Self {
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build HTTP client"),
-            base_url: format!("http://{host}:{port}"),
+            http,
+            base_url: format!("https://{host}:{port}"),
             session_token: None,
         }
     }

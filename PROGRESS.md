@@ -266,9 +266,30 @@ back to the dev walk-up.
 
 ---
 
+### Phase 17: TLS for the control channel
+**Branch:** `phase/17-tls-control-channel`
+**Status:** In progress
+
+Goal: all server <-> admin and server <-> agent traffic is encrypted.
+Browser-style CA trust is a non-goal; pinning by cert fingerprint is the
+production model (lands in Phase 18).
+
+- [x] Server speaks HTTPS via `axum-server` + `rustls`; TCP/plain HTTP fallback (`[tls] enabled = false`) kept for dev
+- [x] First-run cert generation (`rcgen`): self-signed, SANs for localhost / 127.0.0.1 / ::1 / hostname, stored under `%ProgramData%\DeployStation\tls\`
+- [x] `imaging-server fingerprint` subcommand prints the cert's SHA-256 (colon-separated hex), also logged on startup
+- [x] Graceful shutdown adapted to `axum_server::Handle::graceful_shutdown`
+- [x] Service-mode logging fix (preexisting Phase 16 gap -- service_main now initializes `tracing-subscriber`)
+- [x] Agent client flips to `https://`, accepts any cert for now, logs a warning on construction
+- [x] Admin client: `server_client()` / `server_base_url()` helper, all 7 server-facing callsites use HTTPS + accept-any-cert; Microsoft ADK download stays strict
+- [x] Docs: TLS section in `server-deployment.md` covering fingerprint command, cert swap, and HTTP escape hatch
+- [x] Verified: service rebuilt + reinstalled on HTTPS; admin dashboard shows "connected" against the self-signed cert. WinPE agent verification pending the next media rebuild.
+- [ ] Phase 18 preview: carry the server fingerprint in the enrollment key / admin config and enforce it client-side
+
+---
+
 ### Phase 16: Server Packaging (Windows Service)
 **Branch:** `phase/16-server-packaging`
-**Status:** In progress
+**Status:** Complete
 
 Goal: `imaging-server.exe` deploys as a proper Windows Service with a
 config file, log rotation, and install/uninstall scripts.

@@ -74,11 +74,11 @@ async fn get_images(state: tauri::State<'_, AppConfig>) -> Result<Vec<ImageEntry
 }
 
 async fn fetch_images_from_server(config: &AppConfig) -> anyhow::Result<Vec<ImageEntry>> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
-    let base = format!("http://{}:{}", config.server_host, config.server_port);
+    let base = server_base_url(&config.server_host, config.server_port);
 
     let auth_resp = client
         .post(format!("{base}/api/auth"))
@@ -800,6 +800,18 @@ struct AppConfig {
     hostname: String,
 }
 
+/// Builder for talking to imaging-server over HTTPS. The server uses a
+/// self-signed cert; we accept any cert for now. Fingerprint pinning is
+/// Phase 18.
+fn server_client() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+}
+
+fn server_base_url(host: &str, port: u16) -> String {
+    format!("https://{host}:{port}")
+}
+
 struct DbStore(Arc<Mutex<db::AdminDb>>);
 
 // --- Task Sequences ---
@@ -1001,12 +1013,12 @@ pub struct DeployJobEntry {
 
 #[tauri::command]
 async fn get_deploy_jobs(state: tauri::State<'_, AppConfig>) -> Result<Vec<DeployJobEntry>, String> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base = format!("http://{}:{}", state.server_host, state.server_port);
+    let base = server_base_url(&state.server_host, state.server_port);
 
     let auth_resp = client
         .post(format!("{base}/api/auth"))
@@ -1041,12 +1053,12 @@ pub struct AuditEntryJs {
 
 #[tauri::command]
 async fn get_audit_log(state: tauri::State<'_, AppConfig>, search: Option<String>, level: Option<String>) -> Result<Vec<AuditEntryJs>, String> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base = format!("http://{}:{}", state.server_host, state.server_port);
+    let base = server_base_url(&state.server_host, state.server_port);
 
     let auth_resp = client
         .post(format!("{base}/api/auth"))
@@ -1076,12 +1088,12 @@ async fn get_audit_log(state: tauri::State<'_, AppConfig>, search: Option<String
 
 #[tauri::command]
 async fn export_audit_csv(state: tauri::State<'_, AppConfig>) -> Result<String, String> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base = format!("http://{}:{}", state.server_host, state.server_port);
+    let base = server_base_url(&state.server_host, state.server_port);
 
     let auth_resp = client
         .post(format!("{base}/api/auth"))
@@ -1105,12 +1117,12 @@ async fn export_audit_csv(state: tauri::State<'_, AppConfig>) -> Result<String, 
 
 #[tauri::command]
 async fn get_enrollment_keys(state: tauri::State<'_, AppConfig>) -> Result<Vec<KeyListEntry>, String> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base = format!("http://{}:{}", state.server_host, state.server_port);
+    let base = server_base_url(&state.server_host, state.server_port);
 
     let keys: Vec<KeyListEntry> = client
         .get(format!("{base}/api/keys"))
@@ -1123,12 +1135,12 @@ async fn get_enrollment_keys(state: tauri::State<'_, AppConfig>) -> Result<Vec<K
 
 #[tauri::command]
 async fn create_enrollment_key(state: tauri::State<'_, AppConfig>, label: String, expires_in_days: u32) -> Result<CreateKeyResponse, String> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base = format!("http://{}:{}", state.server_host, state.server_port);
+    let base = server_base_url(&state.server_host, state.server_port);
 
     let resp: CreateKeyResponse = client
         .post(format!("{base}/api/keys"))
@@ -1142,12 +1154,12 @@ async fn create_enrollment_key(state: tauri::State<'_, AppConfig>, label: String
 
 #[tauri::command]
 async fn revoke_enrollment_key(state: tauri::State<'_, AppConfig>, id: String) -> Result<(), String> {
-    let client = reqwest::Client::builder()
+    let client = server_client()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base = format!("http://{}:{}", state.server_host, state.server_port);
+    let base = server_base_url(&state.server_host, state.server_port);
 
     client
         .post(format!("{base}/api/keys/{id}/revoke"))

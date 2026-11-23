@@ -18,3 +18,12 @@ log_filter = "imaging_server=info,tower_http=info"
 
 # Optional: directory for daily-rotated log files. Omit to log to stdout only.
 # log_dir = "logs"
+
+# TLS settings. Defaults to HTTPS with a self-signed cert auto-generated on
+# first run. Pin clients to the cert's SHA-256 fingerprint
+# (`imaging-server fingerprint`).
+[tls]
+enabled   = true
+cert_path = "tls/server.crt"
+key_path  = "tls/server.key"
+
