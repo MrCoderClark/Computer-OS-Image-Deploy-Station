@@ -266,9 +266,27 @@ back to the dev walk-up.
 
 ---
 
+### Phase 16: Server Packaging (Windows Service)
+**Branch:** `phase/16-server-packaging`
+**Status:** In progress
+
+Goal: `imaging-server.exe` deploys as a proper Windows Service with a
+config file, log rotation, and install/uninstall scripts.
+
+- [x] Dual-mode binary: console (default, Ctrl-C to stop) and Windows Service (`--service`, SCM-invoked)
+- [x] Service install/uninstall subcommands via `windows-service` crate (`imaging-server install` / `uninstall`)
+- [x] `server.toml` config (bind_addr, db_path, log_filter, log_dir) with lookup order: `--config` → `%ProgramData%\DeployStation\` → next-to-exe → defaults
+- [x] Daily-rotated file logging via `tracing-appender` when `log_dir` is set
+- [x] Graceful shutdown: console mode on Ctrl-C, service mode on SCM Stop/Shutdown
+- [x] `tools/install-server-service.ps1` and `tools/uninstall-server-service.ps1`
+- [x] `docs/server-deployment.md` with build, install, configure, uninstall, firewall
+- [x] Verified: service installs via `install-server-service.ps1`, SCM starts it (LocalSystem, auto-start), and `/health` returns `{"status":"ok","version":"0.1.0"}`
+
+---
+
 ### Phase 15: First-run bootstrapper (ADK auto-install)
 **Branch:** `phase/15-first-run-bootstrap`
-**Status:** In progress
+**Status:** Complete
 
 Goal: the installed admin app should not require users to pre-install the
 Windows ADK. On launch, the app detects missing ADK / WinPE add-on and

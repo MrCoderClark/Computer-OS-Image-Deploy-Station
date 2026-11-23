@@ -1,0 +1,20 @@
+# DeployStation imaging-server configuration.
+#
+# When installed as a Windows Service, the server reads this file from:
+#   %ProgramData%\DeployStation\server.toml
+# When run as a console app, it also looks next to the exe.
+#
+# Relative paths resolve against %ProgramData%\DeployStation\ (installed)
+# or the exe's directory (dev).
+
+# Address and port the HTTP listener binds to.
+bind_addr = "0.0.0.0:7443"
+
+# SQLite database file.
+db_path = "imaging-server.db"
+
+# tracing-subscriber env-filter directives.
+log_filter = "imaging_server=info,tower_http=info"
+
+# Optional: directory for daily-rotated log files. Omit to log to stdout only.
+# log_dir = "logs"
