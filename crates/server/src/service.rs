@@ -47,6 +47,26 @@ fn service_main(_args: Vec<OsString>) {
 }
 
 fn service_main_inner() -> Result<()> {
+    // Set up logging first so anything that follows is captured. Load config
+    // just to find log_dir / log_filter; the full config load happens again
+    // inside run_server (cheap, and keeps the shared config path).
+    let mut cfg = crate::config::Config::load(None).unwrap_or_default();
+    cfg.resolve_paths();
+    let filter = cfg.log_filter.clone();
+    if let Some(dir) = cfg.log_dir.as_ref() {
+        let _ = std::fs::create_dir_all(dir);
+        let file = tracing_appender::rolling::daily(dir, "imaging-server.log");
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(file)
+            .with_ansi(false)
+            .try_init();
+    } else {
+        // No log_dir -> file discarded; service has no stdout. Still init so
+        // any later writer swap is possible.
+        let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    }
+
     // Channel the SCM uses to tell the server to stop.
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
@@ -86,9 +106,10 @@ fn service_main_inner() -> Result<()> {
                     crate::config::Config::default()
                 });
             cfg.resolve_paths();
-            crate::run_server(cfg, async {
-                // Convert sync channel wait into an async future the server
-                // can select on.
+            // init_logging is a crate-private helper in main; we skip it in
+            // service mode -- tracing-subscriber refuses a second init anyway.
+            let handle = axum_server::Handle::new();
+            crate::run_server(cfg, handle, async move {
                 tokio::task::spawn_blocking(move || { let _ = shutdown_rx.recv(); })
                     .await
                     .ok();

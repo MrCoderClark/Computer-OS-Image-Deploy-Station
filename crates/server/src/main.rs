@@ -2,25 +2,22 @@ mod db;
 mod state;
 mod routes;
 mod config;
+mod tls;
 
 #[cfg(windows)]
 mod service;
 
 use anyhow::Result;
 use axum::Router;
+use axum_server::Handle;
 use tracing::info;
 
 use crate::config::Config;
 
 #[cfg(not(windows))]
 fn main() -> Result<()> {
-    // Non-Windows: only console mode exists.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cfg_path = parse_config_flag(&args);
-    let mut cfg = Config::load(cfg_path.as_deref())?;
-    cfg.resolve_paths();
-    init_logging(&cfg);
-    tokio::runtime::Runtime::new()?.block_on(run_server(cfg, futures_shutdown()))
+    dispatch_console(&args)
 }
 
 #[cfg(windows)]
@@ -28,27 +25,33 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     match args.first().map(|s| s.as_str()) {
-        Some("install") => {
-            service::install()
-        }
-        Some("uninstall") => {
-            service::uninstall()
-        }
-        Some("--service") => {
-            // Invoked by SCM. Logging will be set up inside service_main
-            // once the config loads. Any pre-config diagnostics go to stderr,
-            // which the service wrapper ignores -- that's fine.
-            service::run()
-        }
-        _ => {
-            // Console mode.
-            let cfg_path = parse_config_flag(&args);
-            let mut cfg = Config::load(cfg_path.as_deref())?;
-            cfg.resolve_paths();
-            init_logging(&cfg);
-            tokio::runtime::Runtime::new()?.block_on(run_server(cfg, futures_shutdown()))
-        }
+        Some("install")     => service::install(),
+        Some("uninstall")   => service::uninstall(),
+        Some("--service")   => service::run(),
+        Some("fingerprint") => print_fingerprint(&args[1..]),
+        _ => dispatch_console(&args),
     }
+}
+
+fn dispatch_console(args: &[String]) -> Result<()> {
+    let cfg_path = parse_config_flag(args);
+    let mut cfg = Config::load(cfg_path.as_deref())?;
+    cfg.resolve_paths();
+    init_logging(&cfg);
+    tokio::runtime::Runtime::new()?
+        .block_on(run_server(cfg, Handle::new(), console_shutdown()))
+}
+
+fn print_fingerprint(args: &[String]) -> Result<()> {
+    let cfg_path = parse_config_flag(args);
+    let mut cfg = Config::load(cfg_path.as_deref())?;
+    cfg.resolve_paths();
+    if !cfg.tls.cert_path.exists() {
+        anyhow::bail!("No cert at {}. Run the server once to generate it.", cfg.tls.cert_path.display());
+    }
+    let fp = tls::fingerprint(&cfg.tls.cert_path)?;
+    println!("{fp}");
+    Ok(())
 }
 
 fn parse_config_flag(args: &[String]) -> Option<std::path::PathBuf> {
@@ -81,8 +84,9 @@ fn init_logging(cfg: &Config) {
     }
 }
 
-/// Run the HTTP server until `shutdown` resolves.
-pub async fn run_server<F>(cfg: Config, shutdown: F) -> Result<()>
+/// Run the HTTP(S) server until `shutdown` resolves (which triggers
+/// `handle.graceful_shutdown`).
+pub async fn run_server<F>(cfg: Config, handle: Handle, shutdown: F) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
@@ -109,19 +113,40 @@ where
         .merge(routes::api_routes())
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
-    info!("Imaging server listening on {} (db: {})", cfg.bind_addr, cfg.db_path.display());
+    let addr: std::net::SocketAddr = cfg.bind_addr.parse()
+        .map_err(|e| anyhow::anyhow!("invalid bind_addr {}: {e}", cfg.bind_addr))?;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    // Spawn the shutdown watcher so the serve future stays owned simply.
+    let handle_clone = handle.clone();
+    tokio::spawn(async move {
+        shutdown.await;
+        info!("Shutdown signal received, draining connections");
+        handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+    });
+
+    if cfg.tls.enabled {
+        use axum_server::tls_rustls::RustlsConfig;
+        let cert = tls::load_or_generate(&cfg.tls.cert_path, &cfg.tls.key_path)?;
+        let rustls_cfg = RustlsConfig::from_pem_file(&cert.cert_path, &cert.key_path).await?;
+        info!("Imaging server listening on https://{addr} (db: {})", cfg.db_path.display());
+        axum_server::bind_rustls(addr, rustls_cfg)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        tracing::warn!("TLS disabled -- traffic is PLAINTEXT. Only acceptable for dev.");
+        info!("Imaging server listening on http://{addr} (db: {})", cfg.db_path.display());
+        axum_server::bind(addr)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await?;
+    }
 
     info!("Imaging server stopped");
     Ok(())
 }
 
-/// Ctrl-C / SIGTERM wait, for console mode. Never resolves when running as
-/// a service -- the service wrapper uses its own shutdown channel.
-async fn futures_shutdown() {
+/// Ctrl-C wait for console mode.
+async fn console_shutdown() {
     let _ = tokio::signal::ctrl_c().await;
 }
