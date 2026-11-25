@@ -266,6 +266,33 @@ back to the dev walk-up.
 
 ---
 
+### Phase 21: Partition-first scratch for real-size downloads
+**Branch:** `phase/21-partition-first-cache`
+**Status:** In progress
+
+Goal: lift the WinPE 512 MB scratch ceiling that killed Phase 20 Hyper-V
+verification at ~492 MB. The agent now partitions the target disk first,
+stages the download onto the freshly-formatted Windows partition, then
+applies -- so the ceiling is the target drive size, not WinPE's RAM disk.
+
+- [x] Engine: `pipeline::run_deploy` split into `prepare_target_disk` ->
+      `apply_and_configure`. `run_deploy` kept as a thin wrapper for the
+      local-WIM (Offline) fast path.
+- [x] Agent: `start_deploy` orchestrates partition -> (optional download ->
+      `W:\DeployStation\deploy.wim`) -> apply, then best-effort deletes the
+      cached WIM so it doesn't waste space on the installed system
+- [x] Agent: download destination built via `format!` (not `Path::join`) to
+      work around Windows's drive-spec path join quirk (`"W:" + "x"` -> `"W:x"`)
+- [ ] Verify in Hyper-V with a real-size WIM: full download of the 4.37 GB
+      Phase 20 test WIM lands on the VHDX, apply runs against the on-disk
+      copy, bcdboot succeeds, VM boots into Windows
+- [ ] Follow-up: stream-to-apply (WIMGAPI apply consumes HTTP body directly,
+      no intermediate file) as a separate optimization -- partition-first
+      scratch removes the hard blocker so this can wait
+- [ ] Follow-up: Online-mode image picker (carried over from Phase 20)
+
+---
+
 ### Phase 20: Agent wires network downloads into apply
 **Branch:** `phase/20-agent-network-download`
 **Status:** Complete
