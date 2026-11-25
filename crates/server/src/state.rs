@@ -17,6 +17,9 @@ pub struct AppState {
     /// admin clients can bootstrap pinning.
     pub tls_cert_pem: Option<String>,
     pub tls_fingerprint: Option<String>,
+    /// Directory holding image files served by /api/images/{id}/download.
+    /// Convention: `<images_dir>/<image_id>.wim`.
+    pub images_dir: std::path::PathBuf,
 }
 
 impl AppState {
@@ -26,7 +29,13 @@ impl AppState {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             tls_cert_pem: None,
             tls_fingerprint: None,
+            images_dir: std::path::PathBuf::from("images"),
         }
+    }
+
+    pub fn with_images_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.images_dir = dir;
+        self
     }
 
     pub fn with_tls(mut self, cert_pem: String, fingerprint: String) -> Self {

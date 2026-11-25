@@ -1,6 +1,6 @@
 # Windows Imaging Suite — Progress Tracker
 
-> Updated: 2026-11-20
+> Updated: 2026-11-25
 
 ## Build Order
 
@@ -266,9 +266,28 @@ back to the dev walk-up.
 
 ---
 
+### Phase 19: Resumable image transfers
+**Branch:** `phase/19-resumable-transfers`
+**Status:** Complete
+
+Goal: WIM downloads survive network blips. Server streams real files with
+HTTP Range support; agent appends to its partial file and resumes with
+`Range: bytes=OFFSET-`; SHA-256 verified at the end.
+
+- [x] Server: new `images_dir` config knob (`%ProgramData%\DeployStation\images\` by default; `<image_id>.wim` convention)
+- [x] Server: `GET /api/images/{id}/download` streams the file via `axum::Body::from_stream(ReaderStream)`; honors a single open-ended `Range: bytes=START-` (206 Partial Content); returns `Accept-Ranges: bytes` and a strong `ETag` of `"sha256:..."`; 416 when the range starts past EOF
+- [x] Server: `Database::get_image(id)` for the per-id lookup the download needs
+- [x] Agent: `ServerClient::download_image(id, dest, expected_sha256, progress)` -- opens dest in append mode when bytes exist, sends `Range: bytes=OFFSET-`, chunks via `bytes_stream()`, 4-hour per-attempt timeout; SHA-256 recomputed over the assembled file to catch range mis-stitches
+- [x] Agent: handles 416 as "already complete" and proceeds straight to sha256 verify
+- [x] Agent deps: `sha2`, `hex`, `futures-util`; server deps: `tokio-util` with `io` feature
+- [x] Verify end-to-end: 4.37 GB WIM full-download (34.1 MB/s) matches source; Range split at midpoint + reassembly is bit-exact (`tools/test-resumable-download.ps1`)
+- [ ] Next phase: wire `download_image` into the agent's apply flow (NetworkProvider currently returns a path with no download step)
+
+---
+
 ### Phase 18: Server cert pinning (TOFU)
 **Branch:** `phase/18-cert-pinning`
-**Status:** In progress
+**Status:** Complete
 
 Goal: close Phase 17's "accept any cert" fallback with a trust-on-first-use
 flow. The admin trusts a server's self-signed cert out-of-band (user

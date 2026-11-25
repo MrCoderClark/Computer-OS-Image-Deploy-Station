@@ -103,6 +103,7 @@ Options (see `crates/server/server.sample.toml` for the shipped defaults):
 | `db_path`     | `imaging-server.db`                            | Relative to `%ProgramData%\DeployStation\`.        |
 | `log_filter`  | `imaging_server=info,tower_http=info`          | `tracing-subscriber` env-filter.                   |
 | `log_dir`     | *(unset)*                                      | Set to e.g. `logs` to enable daily file logging.   |
+| `images_dir`  | `images`                                       | Folder of `<image_id>.wim` files served by `/api/images/{id}/download` with HTTP Range (resumable). |
 
 ## Uninstall
 
