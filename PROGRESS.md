@@ -266,6 +266,36 @@ back to the dev walk-up.
 
 ---
 
+### Phase 23: Diagnose bcdboot failures on captured WIMs
+**Branch:** `phase/23-bcdboot-diagnostics`
+**Status:** In progress
+
+Goal: when bcdboot fails post-apply (Phase 21/22 verification kept dying at
+`BFSVC Error: Could not open the BCD template store. Status = [c000000f]`),
+the agent's error gives operators something to act on instead of a
+one-line BFSVC blurb. Diagnostic first; a code-side fix (patch in missing
+templates) can come in a follow-up once we know which assets are actually
+missing from real captures.
+
+- [x] Engine: `bcd::configure_boot` now probes the applied image before
+      invoking bcdboot: checks `Windows\Boot\EFI\bootmgfw.efi`,
+      `Windows\System32\config\BCD-Template`, and the parent directories;
+      reports each as missing / zero-byte / present-with-size
+- [x] Engine: bcdboot invoked with `/v` so the real reason surfaces, not
+      just "BFSVC Error"
+- [x] Engine: on failure, error chain includes the full asset inventory
+      plus a one-line hint tailored to which asset is missing (the UI
+      already shows the chain via `{e:#}`)
+- [ ] Verify in Hyper-V: redeploy the same captured Win10 Pro WIM; the
+      error overlay should now name exactly which boot asset is missing
+      and point the operator at the fix
+- [ ] Follow-up (Phase 24 candidate): if the probe shows BCD-Template or
+      bootmgfw.efi routinely missing from captures, add a repair step --
+      copy from WinPE's own `X:\Windows\Boot\` into the applied image
+      before bcdboot runs
+
+---
+
 ### Phase 22: WIM image-index selection end-to-end
 **Branch:** `phase/22-image-index-selection`
 **Status:** In progress
