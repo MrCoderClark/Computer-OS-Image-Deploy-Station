@@ -12,7 +12,22 @@ param(
     # here. Replaces the host opengl32.dll in WinPE so glow/egui renders without a GPU
     # or DirectComposition.
     # Download: https://github.com/pal1000/mesa-dist-win/releases  (x64 release-msvc)
-    [string]$MesaDir = ".\tools\mesa"
+    [string]$MesaDir = ".\tools\mesa",
+    # Optional: SuiteConfig JSON to inject at X:\imaging\config.json. Without
+    # it, the agent runs in standalone mode (no server, no deploy).
+    [string]$ConfigPath = $null,
+    # Optional: Hyper-V virtual switch to attach so the VM can reach the LAN.
+    # "Default Switch" is Hyper-V's built-in NAT switch (DNS-forwarded,
+    # internet-capable). Pass an empty string to leave the VM offline.
+    [string]$SwitchName = "Default Switch",
+    # VM memory. 2 GB is fine for a GUI-only smoke test. For Online-mode
+    # deploys the agent currently caches the WIM in WinPE's RAM-backed X:\Temp,
+    # so this needs to be >= WIM size + ~1.5 GB headroom.
+    [int64]$MemoryBytes = 2GB,
+    # WinPE scratch space (writable X: capacity) in MB. Must be one of
+    # 32/64/128/256/512/1024 -- 1024 is the hard max enforced by the WinPE
+    # boot loader. Capping download stages the agent can hold in RAM.
+    [int]$ScratchMB = 1024
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +46,19 @@ Write-Host "[1/7] Agent binary: $AgentPath" -ForegroundColor Cyan
 
 # --- Create WinPE working directory ---
 $workDir = Join-Path $env:TEMP "DeployStation-HyperV-Test"
+
+# A prior aborted run may have left boot.wim mounted at $workDir\mount. The
+# mount holds a file handle that blocks Remove-Item. Discard any WinPE mount
+# pointing into our workdir, then let DISM reap orphaned mount records.
+Get-WindowsImage -Mounted -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and $_.Path.StartsWith($workDir, [System.StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object {
+    Write-Host "  Discarding stale mount at $($_.Path)" -ForegroundColor Yellow
+    Dismount-WindowsImage -Path $_.Path -Discard -ErrorAction SilentlyContinue | Out-Null
+}
+& Dism.exe /Cleanup-Wim 2>&1 | Out-Null
+& Dism.exe /Cleanup-Mountpoints 2>&1 | Out-Null
+
 if (Test-Path $workDir) { Remove-Item $workDir -Recurse -Force }
 
 Write-Host "[2/7] Creating WinPE working directory..." -ForegroundColor Cyan
@@ -53,6 +81,36 @@ Mount-WindowsImage -ImagePath $bootWim -Index 1 -Path $mountDir -ErrorAction Sto
 
 Write-Host "[4/7] Injecting agent, DLLs, and Mesa3D..." -ForegroundColor Cyan
 & "$PSScriptRoot\winpe-inject-deps.ps1" -MountDir $mountDir -AgentPath $AgentPath -MesaDir $MesaDir
+
+# Inject suite config for a server-driven run (Online/Hybrid). Agent reads it
+# from X:\imaging\config.json inside WinPE.
+if ($ConfigPath) {
+    if (-not (Test-Path $ConfigPath)) { throw "ConfigPath not found: $ConfigPath" }
+    $imagingDir = Join-Path $mountDir 'imaging'
+    New-Item -ItemType Directory -Path $imagingDir -Force | Out-Null
+    Copy-Item -Path $ConfigPath -Destination (Join-Path $imagingDir 'config.json') -Force
+    Write-Host "  Injected suite config: $ConfigPath -> X:\imaging\config.json" -ForegroundColor Green
+}
+
+# Bump WinPE scratch space so the agent has more room to stage downloads in RAM.
+# Default is 512 MB; DISM accepts 32/64/128/256/512, and 1024 on newer ADKs only.
+# Non-fatal: if DISM rejects the requested size we fall back to 512 and keep
+# building -- the default WinPE scratch (~32 MB on some templates, ~512 on 24H2)
+# is enough for a tiny Phase 20 test WIM, which is what Hyper-V can hold anyway.
+$allowed = 32, 64, 128, 256, 512, 1024
+if ($allowed -notcontains $ScratchMB) { throw "ScratchMB must be one of: $($allowed -join ', ')" }
+$trySizes = @($ScratchMB)
+if ($ScratchMB -ne 512) { $trySizes += 512 }
+$scratchSet = $false
+foreach ($size in $trySizes) {
+    Write-Host "  Setting WinPE scratch space to $size MB..." -ForegroundColor Green
+    $dismOut = & Dism.exe /Image:$mountDir /Set-ScratchSpace:$size 2>&1
+    if ($LASTEXITCODE -eq 0) { $scratchSet = $true; break }
+    Write-Host "    DISM rejected $size MB (exit $LASTEXITCODE): $($dismOut | Select-Object -Last 2)" -ForegroundColor Yellow
+}
+if (-not $scratchSet) {
+    Write-Host "  Continuing with the WIM's default scratch space." -ForegroundColor Yellow
+}
 
 # Write startnet.cmd
 Write-Host "[5/7] Writing startnet.cmd..." -ForegroundColor Cyan
@@ -144,17 +202,37 @@ if ($existingVm) {
         Set-VMDvdDrive -VMName $VmName -Path $isoFull
     }
 } else {
-    New-VM -Name $VmName -MemoryStartupBytes 2GB -Generation 2 -NoVHD | Out-Null
+    New-VM -Name $VmName -MemoryStartupBytes $MemoryBytes -Generation 2 -NoVHD | Out-Null
     Add-VMDvdDrive -VMName $VmName -Path $isoFull
     $dvd = Get-VMDvdDrive -VMName $VmName
     Set-VMProcessor -VMName $VmName -Count 2
 }
+# Apply memory on every run so a VM created earlier at a smaller size gets
+# the requested amount. Only touches startup memory (dynamic memory off by default).
+Set-VMMemory -VMName $VmName -StartupBytes $MemoryBytes
 
 # Apply boot settings on EVERY run so a VM created earlier (e.g. with Secure Boot on)
 # gets corrected. WinPE media is unsigned, so Secure Boot must be off, and the DVD
 # must be first in the boot order.
 Set-VMFirmware -VMName $VmName -EnableSecureBoot Off
 Set-VMFirmware -VMName $VmName -FirstBootDevice $dvd
+
+# Attach a network adapter so the agent can reach the host's imaging-server.
+# "Default Switch" is Hyper-V's built-in NAT switch; it exists on every Win10+
+# host. Only touched if $SwitchName is set.
+if ($SwitchName) {
+    if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
+        Write-Host "  (switch '$SwitchName' not found; skipping network attach)" -ForegroundColor Yellow
+    } else {
+        $nic = Get-VMNetworkAdapter -VMName $VmName | Select-Object -First 1
+        if ($nic) {
+            Connect-VMNetworkAdapter -VMName $VmName -SwitchName $SwitchName
+        } else {
+            Add-VMNetworkAdapter -VMName $VmName -SwitchName $SwitchName
+        }
+        Write-Host "  Attached to switch: $SwitchName" -ForegroundColor Green
+    }
+}
 
 Write-Host "VM '$VmName' ready (Secure Boot off, DVD first)." -ForegroundColor Green
 Write-Host ""

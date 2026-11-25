@@ -266,6 +266,28 @@ back to the dev walk-up.
 
 ---
 
+### Phase 20: Agent wires network downloads into apply
+**Branch:** `phase/20-agent-network-download`
+**Status:** Complete
+
+Goal: turn Phase 19's plumbing into a user-visible feature. The agent's
+`NetworkProvider` previously returned a non-existent path and the apply
+pipeline blew up at WIMGAPI; `start_deploy` now pre-flights a resumable
+download when the provider asks for one, then runs the existing pipeline
+against the local file.
+
+- [x] Engine: `ImageProvider::needs_download()` on the trait (default `false`); `NetworkProvider` overrides to `true` so the agent can tell download-required providers from local-only ones
+- [x] Agent: `resolve_deploy_provider()` now returns `(path, index, needs_download)`; `start_deploy` accepts the flag
+- [x] Agent: new `download_before_deploy` step runs before `run_deploy` when `needs_download`; reuses `ServerClient::download_image` (resumable + sha256-verified)
+- [x] Agent: `match_server_image()` picks the catalog entry by `config.image.sha256`, then `name`, falling back to the first catalog entry with a loud warning
+- [x] Agent: download progress rides the existing `PipelineProgress` channel as `DeployStatus::Pending` with a `"Downloading image X.X / Y.Y MB"` message, throttled to one event per whole-percent change
+- [x] Agent: clear preflight errors on the UI when `[server]` is missing from the suite config or when no server image matches (instead of a cryptic WIMGAPI failure later)
+- [x] Verify end-to-end in Hyper-V (2026-11-25): `tools/build-hyperv-online.ps1` builds an ISO with a pinned-cert Online SuiteConfig; agent downloaded the server-registered WIM over HTTPS, SHA-256 matched, pipeline advanced through Validate → Partition → Apply (bcdboot then failed as expected on the synthetic test WIM, which carries no `\Windows\`). Every Phase 20 code path ran clean.
+- [ ] Follow-up: downloaded WIM currently caches in `%TEMP%` (RAM-backed on WinPE, capped at 512 MB scratch on ADK 24H2). Real-size WIMs need either stream-to-apply or a disk-backed cache written after the first partitioning step.
+- [ ] Follow-up: Online-mode Build Media wizard skips the image picker, so the agent's suite config has no `image` metadata and `match_server_image()` falls through to the first-catalog-entry fallback. Safe when the catalog has one row; wire an Online-mode image picker (admin or agent) before the catalog grows.
+
+---
+
 ### Phase 19: Resumable image transfers
 **Branch:** `phase/19-resumable-transfers`
 **Status:** Complete

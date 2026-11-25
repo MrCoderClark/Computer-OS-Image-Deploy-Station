@@ -89,8 +89,8 @@ pub fn show(ctx: &egui::Context, app: &mut AgentApp, is_deploy: bool) {
                                 app.confirm_text.clear();
                                 if is_deploy {
                                     match app.resolve_deploy_provider() {
-                                        Ok((wim_path, index)) => {
-                                            app.start_deploy(0, wim_path, index);
+                                        Ok((wim_path, index, needs_download)) => {
+                                            app.start_deploy(0, wim_path, index, needs_download);
                                         }
                                         Err(e) => {
                                             app.error_message = Some(e);

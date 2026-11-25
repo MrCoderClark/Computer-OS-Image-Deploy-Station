@@ -6,6 +6,14 @@ pub trait ImageProvider: Send + Sync {
     fn wim_path(&self) -> &Path;
     fn image_index(&self) -> u32;
     fn description(&self) -> String;
+
+    /// Whether the agent needs to fetch the WIM from the server before
+    /// the pipeline can apply it. `LocalDiskProvider` says no; the
+    /// `NetworkProvider` says yes so `start_deploy` can prepend a
+    /// download step.
+    fn needs_download(&self) -> bool {
+        false
+    }
 }
 
 pub struct LocalDiskProvider {
@@ -88,6 +96,10 @@ impl ImageProvider for NetworkProvider {
 
     fn description(&self) -> String {
         format!("Network (cached): {}", self.cached_path.display())
+    }
+
+    fn needs_download(&self) -> bool {
+        true
     }
 }
 
