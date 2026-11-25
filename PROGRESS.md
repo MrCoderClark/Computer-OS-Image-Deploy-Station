@@ -268,7 +268,7 @@ back to the dev walk-up.
 
 ### Phase 20: Agent wires network downloads into apply
 **Branch:** `phase/20-agent-network-download`
-**Status:** In progress
+**Status:** Complete
 
 Goal: turn Phase 19's plumbing into a user-visible feature. The agent's
 `NetworkProvider` previously returned a non-existent path and the apply
@@ -282,8 +282,9 @@ against the local file.
 - [x] Agent: `match_server_image()` picks the catalog entry by `config.image.sha256`, then `name`, falling back to the first catalog entry with a loud warning
 - [x] Agent: download progress rides the existing `PipelineProgress` channel as `DeployStatus::Pending` with a `"Downloading image X.X / Y.Y MB"` message, throttled to one event per whole-percent change
 - [x] Agent: clear preflight errors on the UI when `[server]` is missing from the suite config or when no server image matches (instead of a cryptic WIMGAPI failure later)
-- [ ] Verify end-to-end: flash an Online-mode USB against the live server, boot a VM, click Deploy, confirm the agent downloads + applies + boots
-- [ ] Follow-up: downloaded WIM currently caches in `%TEMP%` (RAM-backed on WinPE); large images need a disk-backed cache or stream-to-apply
+- [x] Verify end-to-end in Hyper-V (2026-11-25): `tools/build-hyperv-online.ps1` builds an ISO with a pinned-cert Online SuiteConfig; agent downloaded the server-registered WIM over HTTPS, SHA-256 matched, pipeline advanced through Validate → Partition → Apply (bcdboot then failed as expected on the synthetic test WIM, which carries no `\Windows\`). Every Phase 20 code path ran clean.
+- [ ] Follow-up: downloaded WIM currently caches in `%TEMP%` (RAM-backed on WinPE, capped at 512 MB scratch on ADK 24H2). Real-size WIMs need either stream-to-apply or a disk-backed cache written after the first partitioning step.
+- [ ] Follow-up: Online-mode Build Media wizard skips the image picker, so the agent's suite config has no `image` metadata and `match_server_image()` falls through to the first-catalog-entry fallback. Safe when the catalog has one row; wire an Online-mode image picker (admin or agent) before the catalog grows.
 
 ---
 

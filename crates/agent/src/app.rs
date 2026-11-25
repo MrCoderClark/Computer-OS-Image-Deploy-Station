@@ -288,7 +288,10 @@ impl AgentApp {
 
             if let Some(ctx) = download_ctx {
                 if let Err(e) = download_before_deploy(&ctx, &wim_path, tx.clone()).await {
-                    let _ = tx.send(NetworkEvent::PipelineError(format!("Download failed: {e}")));
+                    // Include the chain so the UI shows the real cause (e.g. a
+                    // reqwest I/O error like "no space left on device" from
+                    // WinPE's RAM scratch filling up), not just the outer context.
+                    let _ = tx.send(NetworkEvent::PipelineError(format!("Download failed: {e:#}")));
                     let _ = forward_handle.await;
                     return;
                 }
