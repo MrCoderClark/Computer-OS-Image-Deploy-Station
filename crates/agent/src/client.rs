@@ -237,14 +237,24 @@ impl ServerClient {
             file.flush().await.context("flush")?;
         }
 
-        // SHA-256 verify over whatever is on disk now, regardless of whether
-        // we just appended or the file was already complete.
+        // SHA-256 verify. Only actually rehash when there's a real chance the
+        // on-disk file mixes bytes from different sources: either we resumed
+        // from a partial (`existing > 0`), or the server said we were already
+        // complete (416) and we need to prove the pre-existing file matches.
+        // For a fresh single-stream download, TCP+TLS already end-to-end
+        // guarantees bytes, so hashing a 4+ GB file over the VHDX-backed
+        // cache just adds minutes to every deploy for no useful coverage.
+        let needs_verify = existing > 0 || status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE;
         if let Some(expected) = expected_sha256 {
-            tracing::info!("Verifying SHA-256 of {}", dest.display());
-            let actual = hash_file_sha256(dest).await
-                .with_context(|| format!("hash {}", dest.display()))?;
-            if !actual.eq_ignore_ascii_case(expected) {
-                anyhow::bail!("sha256 mismatch: got {actual}, expected {expected}");
+            if needs_verify {
+                tracing::info!("Verifying SHA-256 of {} (resumed or pre-existing file)", dest.display());
+                let actual = hash_file_sha256(dest).await
+                    .with_context(|| format!("hash {}", dest.display()))?;
+                if !actual.eq_ignore_ascii_case(expected) {
+                    anyhow::bail!("sha256 mismatch: got {actual}, expected {expected}");
+                }
+            } else {
+                tracing::info!("Fresh single-stream download; skipping post-download SHA-256 rehash (expected {expected})");
             }
         }
 

@@ -266,6 +266,46 @@ back to the dev walk-up.
 
 ---
 
+### Phase 23: Diagnose bcdboot failures on captured WIMs
+**Branch:** `phase/23-bcdboot-diagnostics`
+**Status:** Complete
+
+Goal: when bcdboot fails post-apply (Phase 21/22 verification kept dying at
+`BFSVC Error: Could not open the BCD template store. Status = [c000000f]`),
+the agent's error gives operators something to act on instead of a
+one-line BFSVC blurb. Diagnostic first; a code-side fix (patch in missing
+templates) can come in a follow-up once we know which assets are actually
+missing from real captures.
+
+- [x] Engine: `bcd::configure_boot` now probes the applied image before
+      invoking bcdboot: checks `Windows\Boot\EFI\bootmgfw.efi`,
+      `Windows\System32\config\BCD-Template`, and the parent directories;
+      reports each as missing / zero-byte / present-with-size
+- [x] Engine: bcdboot invoked with `/v` so the real reason surfaces, not
+      just "BFSVC Error"
+- [x] Engine: on failure, error chain includes the full asset inventory
+      plus a one-line hint tailored to which asset is missing (the UI
+      already shows the chain via `{e:#}`)
+- [x] Verified in Hyper-V (2026-11-25): overlay now names each asset with
+      its on-disk size. Finding: for the captured Win10 Pro WIM,
+      `bootmgfw.efi` (1.5 MB) and `BCD-Template` (28 KB) are BOTH present
+      at normal sizes -- so the Phase 21 `c000000f` failure is not a
+      missing-file problem. The template file exists but WinPE's bcdboot
+      refuses to parse it as a valid BCD store (likely a version
+      mismatch between WinPE's bcdboot.exe and the captured image's
+      template hive format).
+- [x] Agent: `ServerClient::download_image` now skips the post-download
+      SHA-256 rehash on fresh single-stream downloads (TCP/TLS already
+      end-to-end verifies). Still rehashes when `existing > 0` (resume
+      from partial) or when the server returned 416 (pre-existing file).
+      Shaved ~minutes off every Online deploy on a VHDX-backed cache.
+- [ ] Phase 24 pickup: prefer `W:\Windows\System32\bcdboot.exe` (the
+      applied image's own, newer, template-aware binary) over WinPE's
+      bcdboot. Also: WIMGAPI apply-progress callback for sub-step UI
+      updates, and a Back button on the error / View Log screens.
+
+---
+
 ### Phase 22: WIM image-index selection end-to-end
 **Branch:** `phase/22-image-index-selection`
 **Status:** In progress
