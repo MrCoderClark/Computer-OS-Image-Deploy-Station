@@ -144,6 +144,11 @@ pub struct ImageMeta {
     pub sha256: Option<String>,
     #[serde(default)]
     pub wim_path: Option<String>,
+    /// Which image index inside the WIM to apply. Defaults to 1. Set higher
+    /// when the WIM is a multi-edition install media (Win 11 install.wim is
+    /// typically Home=1, Home N=2, Education=3, Pro=5, etc).
+    #[serde(default = "crate::types::default_wim_index")]
+    pub wim_index: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +203,7 @@ mod tests {
                 size_bytes: None,
                 sha256: None,
                 wim_path: None,
+                wim_index: 1,
             }),
             enrollment_key: Some("test-key-123".into()),
             built_by: "test".into(),
@@ -224,6 +230,7 @@ mod tests {
                 size_bytes: None,
                 sha256: None,
                 wim_path: None,
+                wim_index: 1,
             }),
             enrollment_key: None,
             built_by: "test".into(),

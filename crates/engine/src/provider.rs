@@ -153,6 +153,7 @@ mod tests {
                 size_bytes: None,
                 sha256: None,
                 wim_path: wim_path.map(|s| s.to_string()),
+                wim_index: 1,
             }),
         };
         let server = match mode {

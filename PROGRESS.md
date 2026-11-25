@@ -266,6 +266,40 @@ back to the dev walk-up.
 
 ---
 
+### Phase 22: WIM image-index selection end-to-end
+**Branch:** `phase/22-image-index-selection`
+**Status:** In progress
+
+Goal: let a catalog entry declare which index inside the WIM to apply.
+Previously the agent hardcoded `image_index = 1`, so multi-edition
+install.wim files could only ever deploy their first edition. Phase 21's
+verification died at bcdboot (`STATUS_INVALID_IMAGE_FORMAT`) because the
+test WIM's index 1 didn't carry BCD templates.
+
+- [x] Common: `ImageRecord`, `ImageSummary`, `ImageMeta` gain
+      `wim_index: u32` with `#[serde(default = "default_wim_index")]` (1).
+      Existing suite configs and server responses keep parsing.
+- [x] Server DB: `images.wim_index INTEGER NOT NULL DEFAULT 1`, additive
+      migration via pragma_table_info check in `Database::open` so existing
+      deployments upgrade without manual intervention.
+- [x] Server routes: `GET /api/images` returns `wim_index`; capture
+      reconcile path inserts rows with `wim_index = 1` (single-index
+      captures).
+- [x] Admin: `ConfigBuildRequest` carries `wim_index`; `build_config` bakes
+      it into suite config's `ImageMeta`.
+- [x] Agent: `match_server_image()` carries the catalog entry's `wim_index`
+      into the `DownloadContext`; `start_deploy` overrides the pipeline's
+      `image_index` with this value for the apply step. Local-WIM paths
+      still honor the provider's default.
+- [ ] Verify in Hyper-V: `Dism /Get-ImageInfo` the WIM, SQL-update the
+      catalog's `wim_index` to an edition that carries BCD templates
+      (typically Pro/Enterprise), rebuild + reboot, confirm bcdboot
+      succeeds and VM boots into Windows OOBE.
+- [ ] Follow-up: admin UI image-detail panel surfaces + edits `wim_index`
+      (currently set via SQL -- fine for small catalogs, awkward at scale).
+
+---
+
 ### Phase 21: Partition-first scratch for real-size downloads
 **Branch:** `phase/21-partition-first-cache`
 **Status:** Complete

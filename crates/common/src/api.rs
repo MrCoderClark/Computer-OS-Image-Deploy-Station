@@ -21,6 +21,8 @@ pub struct ImageSummary {
     pub build_date: Option<String>,
     pub size_bytes: u64,
     pub sha256: String,
+    #[serde(default = "crate::types::default_wim_index")]
+    pub wim_index: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

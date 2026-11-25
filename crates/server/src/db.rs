@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS images (
     build_date TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     sha256 TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    wim_index INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS deploy_jobs (
@@ -81,6 +82,11 @@ impl Database {
 
         conn.execute_batch(SCHEMA).context("create schema")?;
 
+        // Additive migrations for columns added post-ship. SQLite has no
+        // ADD COLUMN IF NOT EXISTS, so check pragma_table_info first.
+        add_column_if_missing(&conn, "images", "wim_index",
+            "INTEGER NOT NULL DEFAULT 1")?;
+
         tracing::info!("Database opened at {}", path.display());
         Ok(Self { conn })
     }
@@ -89,6 +95,8 @@ impl Database {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().context("open in-memory db")?;
         conn.execute_batch(SCHEMA).context("create schema")?;
+        add_column_if_missing(&conn, "images", "wim_index",
+            "INTEGER NOT NULL DEFAULT 1")?;
         Ok(Self { conn })
     }
 
@@ -96,7 +104,7 @@ impl Database {
 
     pub fn insert_image(&self, img: &ImageRecord) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO images (id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT OR REPLACE INTO images (id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at, wim_index) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 img.id.to_string(),
                 img.name,
@@ -106,6 +114,7 @@ impl Database {
                 img.size_bytes as i64,
                 img.sha256,
                 img.created_at.to_rfc3339(),
+                img.wim_index as i64,
             ],
         )?;
         Ok(())
@@ -113,7 +122,7 @@ impl Database {
 
     pub fn list_images(&self) -> Result<Vec<ImageRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at FROM images ORDER BY created_at DESC"
+            "SELECT id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at, wim_index FROM images ORDER BY created_at DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -132,6 +141,7 @@ impl Database {
                 created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
                     .map(|d| d.with_timezone(&chrono::Utc))
                     .unwrap_or_default(),
+                wim_index: row.get::<_, i64>(8)? as u32,
             })
         })?;
 
@@ -140,7 +150,7 @@ impl Database {
 
     pub fn get_image(&self, id: &Uuid) -> Result<Option<ImageRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at FROM images WHERE id = ?1"
+            "SELECT id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at, wim_index FROM images WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id.to_string()], |row| {
             let id_str: String = row.get(0)?;
@@ -158,6 +168,7 @@ impl Database {
                 created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
                     .map(|d| d.with_timezone(&chrono::Utc))
                     .unwrap_or_default(),
+                wim_index: row.get::<_, i64>(8)? as u32,
             })
         })?;
         match rows.next() {
@@ -475,6 +486,27 @@ pub fn audit(db: &Database, actor: &str, action: &str, target: &str, detail: Opt
     }
 }
 
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    column_def: &str,
+) -> Result<()> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        params![table, column],
+        |row| row.get(0),
+    ).with_context(|| format!("pragma_table_info({table})"))?;
+    if count == 0 {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {column_def}"),
+            [],
+        ).with_context(|| format!("ALTER TABLE {table} ADD COLUMN {column}"))?;
+        tracing::info!("Migrated {table}: added column `{column}`");
+    }
+    Ok(())
+}
+
 fn parse_os_family(s: &str) -> OsFamily {
     match s {
         "win10" => OsFamily::Win10,
@@ -510,6 +542,7 @@ mod tests {
             size_bytes: 1_000_000,
             sha256: "abc123".into(),
             created_at: chrono::Utc::now(),
+            wim_index: 1,
         }
     }
 

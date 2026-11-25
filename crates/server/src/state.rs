@@ -56,6 +56,7 @@ impl AppState {
                 size_bytes: 21_474_836_480,
                 sha256: "a1b2c3d4e5f6...".into(),
                 created_at: chrono::Utc::now(),
+                wim_index: 1,
             },
             imaging_common::types::ImageRecord {
                 id: Uuid::new_v4(),
@@ -66,6 +67,7 @@ impl AppState {
                 size_bytes: 26_306_043_904,
                 sha256: "f6e5d4c3b2a1...".into(),
                 created_at: chrono::Utc::now(),
+                wim_index: 1,
             },
             imaging_common::types::ImageRecord {
                 id: Uuid::new_v4(),
@@ -76,6 +78,7 @@ impl AppState {
                 size_bytes: 19_541_065_728,
                 sha256: "deadbeef1234...".into(),
                 created_at: chrono::Utc::now(),
+                wim_index: 1,
             },
         ];
 
