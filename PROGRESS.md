@@ -266,6 +266,27 @@ back to the dev walk-up.
 
 ---
 
+### Phase 20: Agent wires network downloads into apply
+**Branch:** `phase/20-agent-network-download`
+**Status:** In progress
+
+Goal: turn Phase 19's plumbing into a user-visible feature. The agent's
+`NetworkProvider` previously returned a non-existent path and the apply
+pipeline blew up at WIMGAPI; `start_deploy` now pre-flights a resumable
+download when the provider asks for one, then runs the existing pipeline
+against the local file.
+
+- [x] Engine: `ImageProvider::needs_download()` on the trait (default `false`); `NetworkProvider` overrides to `true` so the agent can tell download-required providers from local-only ones
+- [x] Agent: `resolve_deploy_provider()` now returns `(path, index, needs_download)`; `start_deploy` accepts the flag
+- [x] Agent: new `download_before_deploy` step runs before `run_deploy` when `needs_download`; reuses `ServerClient::download_image` (resumable + sha256-verified)
+- [x] Agent: `match_server_image()` picks the catalog entry by `config.image.sha256`, then `name`, falling back to the first catalog entry with a loud warning
+- [x] Agent: download progress rides the existing `PipelineProgress` channel as `DeployStatus::Pending` with a `"Downloading image X.X / Y.Y MB"` message, throttled to one event per whole-percent change
+- [x] Agent: clear preflight errors on the UI when `[server]` is missing from the suite config or when no server image matches (instead of a cryptic WIMGAPI failure later)
+- [ ] Verify end-to-end: flash an Online-mode USB against the live server, boot a VM, click Deploy, confirm the agent downloads + applies + boots
+- [ ] Follow-up: downloaded WIM currently caches in `%TEMP%` (RAM-backed on WinPE); large images need a disk-backed cache or stream-to-apply
+
+---
+
 ### Phase 19: Resumable image transfers
 **Branch:** `phase/19-resumable-transfers`
 **Status:** Complete

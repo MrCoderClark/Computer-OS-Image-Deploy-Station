@@ -169,28 +169,106 @@ impl AgentApp {
         }
     }
 
-    pub fn resolve_deploy_provider(&self) -> Result<(std::path::PathBuf, u32), String> {
+    pub fn resolve_deploy_provider(&self) -> Result<(std::path::PathBuf, u32, bool), String> {
         let config = self.config.as_ref().ok_or("No configuration loaded")?;
         let provider = imaging_engine::provider::create_provider(config)
             .map_err(|e| format!("Failed to create image provider: {e}"))?;
-        Ok((provider.wim_path().to_path_buf(), provider.image_index()))
+        Ok((
+            provider.wim_path().to_path_buf(),
+            provider.image_index(),
+            provider.needs_download(),
+        ))
     }
 
-    pub fn start_deploy(&mut self, target_disk: u32, wim_path: std::path::PathBuf, image_index: u32) {
+    /// Pick the server-catalog image this agent should deploy. Prefers a
+    /// sha256 match against the suite config's baked-in metadata (built
+    /// at USB-build time from the same catalog), then a name match. Falls
+    /// back to the first catalog entry with a loud log if neither is set.
+    fn match_server_image(&self) -> Option<ImageSummary> {
+        let image = self.config.as_ref().and_then(|c| c.image.as_ref());
+        if let Some(sha) = image.and_then(|i| i.sha256.as_deref()) {
+            if let Some(hit) = self
+                .server_images
+                .iter()
+                .find(|s| s.sha256.eq_ignore_ascii_case(sha))
+            {
+                return Some(hit.clone());
+            }
+        }
+        if let Some(name) = image.map(|i| i.name.as_str()) {
+            if let Some(hit) = self.server_images.iter().find(|s| s.name == name) {
+                return Some(hit.clone());
+            }
+        }
+        if let Some(first) = self.server_images.first() {
+            tracing::warn!(
+                "No sha256/name match for suite image in server catalog; falling back to first entry ({})",
+                first.name
+            );
+            return Some(first.clone());
+        }
+        None
+    }
+
+    pub fn start_deploy(
+        &mut self,
+        target_disk: u32,
+        wim_path: std::path::PathBuf,
+        image_index: u32,
+        needs_download: bool,
+    ) {
         let job_id = uuid::Uuid::new_v4();
         let tx = self.net_tx.clone();
         self.deploy_status = Some(DeployStatus::Pending);
         self.deploy_progress = 0;
-        self.deploy_message = "Starting deploy...".into();
+        self.deploy_message = if needs_download {
+            "Preparing download...".into()
+        } else {
+            "Starting deploy...".into()
+        };
         self.deploy_started = Some(Instant::now());
         self.log_lines.clear();
         self.log_expanded = false;
         self.screen = Screen::Progress;
 
+        // Everything the download task needs. Resolved before the move so
+        // the UI thread can surface "no server configured" / "no catalog
+        // match" errors with the same shape as a download failure.
+        let download_ctx = if needs_download {
+            let matched = match self.match_server_image() {
+                Some(m) => m,
+                None => {
+                    let _ = tx.send(NetworkEvent::PipelineError(
+                        "Cannot download image: server catalog has no matching entry. Rebuild the USB with a populated image, or verify the server has the image loaded.".into(),
+                    ));
+                    return;
+                }
+            };
+            let server = match self.config.as_ref().and_then(|c| c.server.clone()) {
+                Some(sc) => sc,
+                None => {
+                    let _ = tx.send(NetworkEvent::PipelineError(
+                        "Cannot download image: suite config has no [server] section.".into(),
+                    ));
+                    return;
+                }
+            };
+            Some(DownloadContext {
+                image_id: matched.id,
+                expected_sha256: matched.sha256,
+                size_bytes: matched.size_bytes,
+                server,
+                enrollment_key: self.config.as_ref().and_then(|c| c.enrollment_key.clone()),
+                machine_name: self.machine_name.clone(),
+            })
+        } else {
+            None
+        };
+
         let request = imaging_engine::pipeline::DeployRequest {
             job_id,
             target_disk,
-            wim_path,
+            wim_path: wim_path.clone(),
             image_index,
         };
 
@@ -207,6 +285,14 @@ impl AgentApp {
                     });
                 }
             });
+
+            if let Some(ctx) = download_ctx {
+                if let Err(e) = download_before_deploy(&ctx, &wim_path, tx.clone()).await {
+                    let _ = tx.send(NetworkEvent::PipelineError(format!("Download failed: {e}")));
+                    let _ = forward_handle.await;
+                    return;
+                }
+            }
 
             match imaging_engine::pipeline::run_deploy(request, progress_tx).await {
                 Ok(()) => {
@@ -358,6 +444,93 @@ impl eframe::App for AgentApp {
             Screen::Error => crate::ui::error_screen::show(ctx, self),
         }
     }
+}
+
+struct DownloadContext {
+    image_id: uuid::Uuid,
+    expected_sha256: String,
+    size_bytes: u64,
+    server: imaging_common::config::ServerConfig,
+    enrollment_key: Option<String>,
+    machine_name: String,
+}
+
+async fn download_before_deploy(
+    ctx: &DownloadContext,
+    dest: &std::path::Path,
+    tx: mpsc::UnboundedSender<NetworkEvent>,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let host = ctx.server.host.as_deref().unwrap_or("127.0.0.1");
+    let port = ctx.server.port;
+    let cert_pem = ctx.server.cert_pem.as_deref();
+
+    let mut client = crate::client::ServerClient::new(host, port, cert_pem);
+    client
+        .authenticate(&ctx.machine_name, ctx.enrollment_key.as_deref())
+        .await
+        .context("authenticate for download")?;
+
+    // Throttle progress to one event per whole-percent change so we don't
+    // flood the UI channel with 100k+ events over a multi-GB download.
+    let last_pct = std::sync::Arc::new(std::sync::atomic::AtomicI8::new(-1));
+    let last_pct_cb = last_pct.clone();
+    let tx_cb = tx.clone();
+    let total_from_catalog = ctx.size_bytes;
+
+    let progress = move |done: u64, total: u64| {
+        // Prefer catalog-advertised size if the stream hasn't reported one yet.
+        let total = if total > 0 { total } else { total_from_catalog };
+        let pct = if total > 0 {
+            ((done.saturating_mul(100)) / total).min(100) as i8
+        } else {
+            0
+        };
+        let prev = last_pct_cb.load(std::sync::atomic::Ordering::Relaxed);
+        if pct == prev { return; }
+        last_pct_cb.store(pct, std::sync::atomic::Ordering::Relaxed);
+
+        let msg = if total > 0 {
+            format!(
+                "Downloading image {:.1} / {:.1} MB",
+                done as f64 / (1024.0 * 1024.0),
+                total as f64 / (1024.0 * 1024.0),
+            )
+        } else {
+            format!("Downloading image ({} bytes)", done)
+        };
+        let _ = tx_cb.send(NetworkEvent::PipelineProgress {
+            status: DeployStatus::Pending,
+            progress_pct: pct.max(0) as u8,
+            message: msg,
+        });
+    };
+
+    // Kick off with an initial 0% so the UI switches from "Preparing download..."
+    // to "Downloading image ..." immediately, even before the first byte lands.
+    let _ = tx.send(NetworkEvent::PipelineProgress {
+        status: DeployStatus::Pending,
+        progress_pct: 0,
+        message: "Downloading image...".into(),
+    });
+
+    client
+        .download_image(
+            ctx.image_id,
+            dest,
+            Some(&ctx.expected_sha256),
+            progress,
+        )
+        .await
+        .with_context(|| format!("download image {}", ctx.image_id))?;
+
+    let _ = tx.send(NetworkEvent::PipelineProgress {
+        status: DeployStatus::Pending,
+        progress_pct: 100,
+        message: "Image downloaded and verified".into(),
+    });
+
+    Ok(())
 }
 
 async fn connect_to_server(
