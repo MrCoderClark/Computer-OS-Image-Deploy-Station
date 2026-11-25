@@ -268,7 +268,7 @@ back to the dev walk-up.
 
 ### Phase 23: Diagnose bcdboot failures on captured WIMs
 **Branch:** `phase/23-bcdboot-diagnostics`
-**Status:** In progress
+**Status:** Complete
 
 Goal: when bcdboot fails post-apply (Phase 21/22 verification kept dying at
 `BFSVC Error: Could not open the BCD template store. Status = [c000000f]`),
@@ -286,13 +286,23 @@ missing from real captures.
 - [x] Engine: on failure, error chain includes the full asset inventory
       plus a one-line hint tailored to which asset is missing (the UI
       already shows the chain via `{e:#}`)
-- [ ] Verify in Hyper-V: redeploy the same captured Win10 Pro WIM; the
-      error overlay should now name exactly which boot asset is missing
-      and point the operator at the fix
-- [ ] Follow-up (Phase 24 candidate): if the probe shows BCD-Template or
-      bootmgfw.efi routinely missing from captures, add a repair step --
-      copy from WinPE's own `X:\Windows\Boot\` into the applied image
-      before bcdboot runs
+- [x] Verified in Hyper-V (2026-11-25): overlay now names each asset with
+      its on-disk size. Finding: for the captured Win10 Pro WIM,
+      `bootmgfw.efi` (1.5 MB) and `BCD-Template` (28 KB) are BOTH present
+      at normal sizes -- so the Phase 21 `c000000f` failure is not a
+      missing-file problem. The template file exists but WinPE's bcdboot
+      refuses to parse it as a valid BCD store (likely a version
+      mismatch between WinPE's bcdboot.exe and the captured image's
+      template hive format).
+- [x] Agent: `ServerClient::download_image` now skips the post-download
+      SHA-256 rehash on fresh single-stream downloads (TCP/TLS already
+      end-to-end verifies). Still rehashes when `existing > 0` (resume
+      from partial) or when the server returned 416 (pre-existing file).
+      Shaved ~minutes off every Online deploy on a VHDX-backed cache.
+- [ ] Phase 24 pickup: prefer `W:\Windows\System32\bcdboot.exe` (the
+      applied image's own, newer, template-aware binary) over WinPE's
+      bcdboot. Also: WIMGAPI apply-progress callback for sub-step UI
+      updates, and a Back button on the error / View Log screens.
 
 ---
 
