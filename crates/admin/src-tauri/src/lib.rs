@@ -21,6 +21,7 @@ pub struct ConfigBuildRequest {
     pub capture_unc_path: Option<String>,
     pub capture_account: Option<String>,
     pub enrollment_key: Option<String>,
+    pub wim_index: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -168,6 +169,7 @@ fn build_config_inner(
             size_bytes: None,
             sha256: None,
             wim_path: None,
+            wim_index: request.wim_index.unwrap_or(1),
         })
     } else {
         None

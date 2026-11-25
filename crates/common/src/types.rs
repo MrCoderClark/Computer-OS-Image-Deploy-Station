@@ -11,7 +11,15 @@ pub struct ImageRecord {
     pub size_bytes: u64,
     pub sha256: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Which image index to apply inside the WIM. Multi-edition install.wim
+    /// files hold several (Home, Pro, Education, ...); captured WIMs usually
+    /// have one. Defaults to 1, which is what single-index captures and most
+    /// install media's first edition want.
+    #[serde(default = "default_wim_index")]
+    pub wim_index: u32,
 }
+
+pub fn default_wim_index() -> u32 { 1 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

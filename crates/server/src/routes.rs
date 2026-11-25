@@ -126,6 +126,7 @@ async fn list_images(
             build_date: Some(img.build_date.to_string()),
             size_bytes: img.size_bytes,
             sha256: img.sha256.clone(),
+            wim_index: img.wim_index,
         })
         .collect();
 
@@ -293,6 +294,7 @@ async fn reconcile_capture(
         size_bytes: manifest.size_bytes,
         sha256: manifest.sha256,
         created_at: manifest.captured_at,
+        wim_index: 1,
     };
 
     let db = state.db.lock().await;

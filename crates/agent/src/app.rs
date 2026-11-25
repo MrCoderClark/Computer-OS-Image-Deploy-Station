@@ -253,6 +253,7 @@ impl AgentApp {
                 image_id: matched.id,
                 expected_sha256: matched.sha256,
                 size_bytes: matched.size_bytes,
+                wim_index: matched.wim_index,
                 server,
                 enrollment_key: self.config.as_ref().and_then(|c| c.enrollment_key.clone()),
                 machine_name: self.machine_name.clone(),
@@ -298,6 +299,9 @@ impl AgentApp {
 
             // If this provider needs a download, land the WIM on the Windows
             // partition we just created, then point the apply at that file.
+            // Also override image_index with the catalog entry's wim_index --
+            // the provider defaults to 1, but multi-edition install.wim files
+            // may need a specific index (Home/Pro/Education/...) picked.
             let (effective_request, cached_wim) = if let Some(ctx) = download_ctx {
                 // Windows path join doesn't add a separator between a drive
                 // spec ("W:") and a child, so build with format! -- "W:" +
@@ -310,6 +314,7 @@ impl AgentApp {
                     let _ = forward_handle.await;
                     return;
                 }
+                let catalog_index = ctx.wim_index;
                 if let Err(e) = download_before_deploy(&ctx, &cache_path, tx.clone()).await {
                     let _ = tx.send(NetworkEvent::PipelineError(format!("Download failed: {e:#}")));
                     let _ = forward_handle.await;
@@ -317,6 +322,7 @@ impl AgentApp {
                 }
                 let req = imaging_engine::pipeline::DeployRequest {
                     wim_path: cache_path.clone(),
+                    image_index: catalog_index,
                     ..request
                 };
                 (req, Some(cache_path))
@@ -489,6 +495,11 @@ struct DownloadContext {
     image_id: uuid::Uuid,
     expected_sha256: String,
     size_bytes: u64,
+    /// The index inside the WIM to apply after download. For multi-edition
+    /// install.wim files this picks which edition (Home/Pro/...); for single-
+    /// index captures it's always 1. Comes from the server catalog entry via
+    /// `match_server_image()`.
+    wim_index: u32,
     server: imaging_common::config::ServerConfig,
     enrollment_key: Option<String>,
     machine_name: String,
