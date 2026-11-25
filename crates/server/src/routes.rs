@@ -136,26 +136,100 @@ async fn list_images(
 struct DownloadQuery {
     #[serde(default)]
     transfer_id: Option<Uuid>,
-    #[serde(default)]
-    offset: Option<u64>,
 }
 
+/// Stream an image file. Supports a single open-ended byte range
+/// (`Range: bytes=START-`), which is all the agent needs to resume.
+/// Full-stream GET returns 200; ranged GET returns 206.
 async fn download_image(
     State(state): State<AppState>,
     Path(image_id): Path<Uuid>,
     Query(query): Query<DownloadQuery>,
     headers: HeaderMap,
-) -> Result<StatusCode, StatusCode> {
-    extract_session(&state, &headers).await?;
+) -> Result<axum::response::Response, (StatusCode, String)> {
+    extract_session(&state, &headers).await
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "unauthorized".into()))?;
 
     let transfer_id = query.transfer_id.unwrap_or_else(Uuid::new_v4);
-    let offset = query.offset.unwrap_or(0);
+
+    // Look up the image record so we can return its sha256 as an ETag
+    // and reject unknown IDs.
+    let record = {
+        let db = state.db.lock().await;
+        db.get_image(&image_id).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    }
+    .ok_or((StatusCode::NOT_FOUND, format!("image {image_id} not in catalog")))?;
+
+    let file_path = state.images_dir.join(format!("{image_id}.wim"));
+    let mut file = tokio::fs::File::open(&file_path).await.map_err(|e| {
+        (StatusCode::NOT_FOUND, format!("image file missing at {}: {e}", file_path.display()))
+    })?;
+    let total_size = file.metadata().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .len();
+
+    // Parse `Range: bytes=START-` (single open-ended range only).
+    let (start, status) = match headers.get(axum::http::header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_bytes_range)
+    {
+        Some(s) if s < total_size => (s, StatusCode::PARTIAL_CONTENT),
+        Some(_) => {
+            // Range starts at or past EOF -> 416
+            let mut r = axum::response::Response::new(axum::body::Body::empty());
+            *r.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+            r.headers_mut().insert(axum::http::header::CONTENT_RANGE,
+                format!("bytes */{total_size}").parse().unwrap());
+            return Ok(r);
+        }
+        None => (0, StatusCode::OK),
+    };
+
+    use tokio::io::AsyncSeekExt;
+    if start > 0 {
+        file.seek(std::io::SeekFrom::Start(start)).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    let remaining = total_size - start;
 
     tracing::info!(
-        "Download requested: image={image_id}, transfer={transfer_id}, offset={offset}"
+        "Download: image={image_id} transfer={transfer_id} offset={start} total={total_size} ({:.1}%)",
+        if total_size == 0 { 100.0 } else { (start as f64 / total_size as f64) * 100.0 }
     );
 
-    Ok(StatusCode::NO_CONTENT)
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+
+    let mut resp = axum::response::Response::new(body);
+    *resp.status_mut() = status;
+    let h = resp.headers_mut();
+    h.insert(axum::http::header::CONTENT_LENGTH, remaining.to_string().parse().unwrap());
+    h.insert(axum::http::header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+    h.insert(axum::http::header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    if !record.sha256.is_empty() {
+        // Strong ETag of the full-file sha256. Clients can compare after
+        // reassembly to detect mid-stream corruption or source rotation.
+        let etag = format!("\"sha256:{}\"", record.sha256);
+        h.insert(axum::http::header::ETAG, etag.parse().unwrap());
+    }
+    if status == StatusCode::PARTIAL_CONTENT {
+        let end = total_size - 1;
+        h.insert(axum::http::header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total_size}").parse().unwrap());
+    }
+    Ok(resp)
+}
+
+/// Parse `bytes=START-` or `bytes=START-END`. Returns just the start offset;
+/// we always stream to EOF for an open-ended range, which is all the agent
+/// needs for resume. Returns None for multipart or suffix ranges.
+fn parse_bytes_range(hdr: &str) -> Option<u64> {
+    let rest = hdr.strip_prefix("bytes=")?;
+    if rest.contains(',') { return None; }
+    let (start, _end) = rest.split_once('-')?;
+    let start = start.trim();
+    if start.is_empty() { return None; }  // suffix range not supported
+    start.parse().ok()
 }
 
 async fn report_deploy_status(

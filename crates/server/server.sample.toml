@@ -19,6 +19,12 @@ log_filter = "imaging_server=info,tower_http=info"
 # Optional: directory for daily-rotated log files. Omit to log to stdout only.
 # log_dir = "logs"
 
+# Directory holding image files. Convention: <images_dir>/<image_id>.wim.
+# The /api/images endpoint lists what's registered; /api/images/{id}/download
+# streams the file at this path. Relative paths resolve against
+# %ProgramData%\DeployStation\ when installed, otherwise the exe's directory.
+images_dir = "images"
+
 # TLS settings. Defaults to HTTPS with a self-signed cert auto-generated on
 # first run. Pin clients to the cert's SHA-256 fingerprint
 # (`imaging-server fingerprint`).

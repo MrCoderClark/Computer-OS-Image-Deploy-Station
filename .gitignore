@@ -49,3 +49,6 @@ tools/mesa/
 
 # Logs
 *.log
+
+# Phase 19 resumable-download test scratch dir (parts + hash cache)
+/ds-resume-test/

@@ -97,7 +97,8 @@ where
     }
 
     let database = db::Database::open(&cfg.db_path)?;
-    let mut app_state = state::AppState::new(database);
+    std::fs::create_dir_all(&cfg.images_dir).ok();
+    let mut app_state = state::AppState::new(database).with_images_dir(cfg.images_dir.clone());
 
     // Load the TLS cert ONCE: used for both the listener and
     // /cert + /fingerprint route responses. `None` when TLS is off.

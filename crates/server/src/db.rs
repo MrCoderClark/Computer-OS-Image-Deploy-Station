@@ -138,6 +138,34 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("read images")
     }
 
+    pub fn get_image(&self, id: &Uuid) -> Result<Option<ImageRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, os_family, captured_from, build_date, size_bytes, sha256, created_at FROM images WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let os_str: String = row.get(2)?;
+            let date_str: String = row.get(4)?;
+            let created_str: String = row.get(7)?;
+            Ok(ImageRecord {
+                id: id_str.parse().unwrap_or_default(),
+                name: row.get(1)?,
+                os_family: parse_os_family(&os_str),
+                captured_from: row.get(3)?,
+                build_date: date_str.parse().unwrap_or_default(),
+                size_bytes: row.get::<_, i64>(5)? as u64,
+                sha256: row.get(6)?,
+                created_at: chrono::DateTime::parse_from_rfc3339(&created_str)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or_default(),
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     // --- Deploy Jobs ---
 
     pub fn upsert_deploy_job(&self, job: &DeployJob, message: &str) -> Result<()> {

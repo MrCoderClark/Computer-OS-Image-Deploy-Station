@@ -19,6 +19,8 @@ pub struct Config {
     pub log_filter: String,
     #[serde(default)]
     pub log_dir: Option<PathBuf>,
+    #[serde(default = "Config::default_images_dir")]
+    pub images_dir: PathBuf,
     #[serde(default)]
     pub tls: TlsConfig,
 }
@@ -58,6 +60,7 @@ impl Default for Config {
             db_path:   Self::default_db_path(),
             log_filter: Self::default_log_filter(),
             log_dir: None,
+            images_dir: Self::default_images_dir(),
             tls: TlsConfig::default(),
         }
     }
@@ -67,6 +70,7 @@ impl Config {
     fn default_bind_addr() -> String { "0.0.0.0:7443".to_string() }
     fn default_db_path()   -> PathBuf { PathBuf::from("imaging-server.db") }
     fn default_log_filter() -> String { "imaging_server=info,tower_http=info".to_string() }
+    fn default_images_dir() -> PathBuf { PathBuf::from("images") }
 
     /// Load config using the lookup order above. Returns defaults when no
     /// file is found; returns an error only if a file was found but could
@@ -118,6 +122,9 @@ impl Config {
             if ld.is_relative() {
                 self.log_dir = Some(base.join(ld));
             }
+        }
+        if self.images_dir.is_relative() {
+            self.images_dir = base.join(&self.images_dir);
         }
         if self.tls.cert_path.is_relative() {
             self.tls.cert_path = base.join(&self.tls.cert_path);
