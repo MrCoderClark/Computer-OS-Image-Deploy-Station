@@ -127,7 +127,15 @@ fn parse_disk_list(output: &str) -> Result<Vec<DiskInfo>> {
             _ => (size_val * 1_073_741_824.0) as u64,
         };
 
-        let is_boot = trimmed.contains("*");
+        // NB: diskpart's `list disk` has no "boot" column. The `*` in the
+        // Dyn/Gpt columns means "dynamic" / "GPT-formatted", neither of
+        // which identifies the boot disk. Previously we flagged any line
+        // containing `*` as boot, which false-positives on any GPT disk
+        // (every disk we partition, for a start) and blocked re-deploys.
+        // Leave the field here so `validate_target_disk` still respects it
+        // when a real source wires it in (follow-up: `Get-Disk | ? IsBoot`
+        // via WMI from Rust so this works without the PowerShell OC).
+        let is_boot = false;
 
         disks.push(DiskInfo {
             number,

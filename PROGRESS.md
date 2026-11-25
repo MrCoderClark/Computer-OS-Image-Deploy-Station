@@ -266,6 +266,49 @@ back to the dev walk-up.
 
 ---
 
+### Phase 21: Partition-first scratch for real-size downloads
+**Branch:** `phase/21-partition-first-cache`
+**Status:** Complete
+
+Goal: lift the WinPE 512 MB scratch ceiling that killed Phase 20 Hyper-V
+verification at ~492 MB. The agent now partitions the target disk first,
+stages the download onto the freshly-formatted Windows partition, then
+applies -- so the ceiling is the target drive size, not WinPE's RAM disk.
+
+- [x] Engine: `pipeline::run_deploy` split into `prepare_target_disk` ->
+      `apply_and_configure`. `run_deploy` kept as a thin wrapper for the
+      local-WIM (Offline) fast path.
+- [x] Agent: `start_deploy` orchestrates partition -> (optional download ->
+      `W:\DeployStation\deploy.wim`) -> apply, then best-effort deletes the
+      cached WIM so it doesn't waste space on the installed system
+- [x] Agent: download destination built via `format!` (not `Path::join`) to
+      work around Windows's drive-spec path join quirk (`"W:" + "x"` -> `"W:x"`)
+- [x] Verified in Hyper-V (2026-11-25): full 4479.7 MB download landed on the
+      VHDX (previously capped at ~492 MB in WinPE RAM), SHA-256 matched, and
+      WIMGAPI apply ran against the on-disk copy. bcdboot then failed with
+      `0xc000000f (STATUS_INVALID_IMAGE_FORMAT)`, but that's a separate
+      pre-existing issue with the test WIM / `image_index = 1` hardcode;
+      every Phase 21 code path ran clean.
+- [x] Bugfix: `enumerate_disks` no longer misreads diskpart's `*` (Gpt/Dyn
+      columns) as the boot disk -- false-positive blocked re-deploys onto
+      any previously-GPT-formatted target. Proper boot detection via
+      `Get-Disk | ? IsBoot` (or WMI) is a follow-up.
+- [ ] Follow-up (Phase 22 candidate): investigate bcdboc `0xc000000f` -- WIM
+      may be a non-standard/captured image, or `image_index = 1` isn't the
+      OS edition we want. Expose index selection in the suite config +
+      admin build-media wizard.
+- [ ] Follow-up: skip the post-download sha256 rehash when the stream was
+      not resumed (slow on 4+ GB over the VHDX-backed cache; the server's
+      chunk integrity is sufficient for single-stream downloads)
+- [ ] Follow-up: proper boot-disk detection via `Get-Disk | ? IsBoot` or WMI
+      from Rust so physical USB-booted hardware is actually protected
+- [ ] Follow-up: stream-to-apply (WIMGAPI apply consumes HTTP body directly,
+      no intermediate file) as a later optimization -- partition-first
+      scratch removes the hard blocker so this can wait
+- [ ] Follow-up: Online-mode image picker (carried over from Phase 20)
+
+---
+
 ### Phase 20: Agent wires network downloads into apply
 **Branch:** `phase/20-agent-network-download`
 **Status:** Complete

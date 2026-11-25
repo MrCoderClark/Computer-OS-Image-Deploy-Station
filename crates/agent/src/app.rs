@@ -221,11 +221,7 @@ impl AgentApp {
         let tx = self.net_tx.clone();
         self.deploy_status = Some(DeployStatus::Pending);
         self.deploy_progress = 0;
-        self.deploy_message = if needs_download {
-            "Preparing download...".into()
-        } else {
-            "Starting deploy...".into()
-        };
+        self.deploy_message = "Starting deploy...".into();
         self.deploy_started = Some(Instant::now());
         self.log_lines.clear();
         self.log_expanded = false;
@@ -286,24 +282,64 @@ impl AgentApp {
                 }
             });
 
-            if let Some(ctx) = download_ctx {
-                if let Err(e) = download_before_deploy(&ctx, &wim_path, tx.clone()).await {
-                    // Include the chain so the UI shows the real cause (e.g. a
-                    // reqwest I/O error like "no space left on device" from
-                    // WinPE's RAM scratch filling up), not just the outer context.
+            // Partition first -- the freshly-formatted Windows partition is
+            // the only disk-backed scratch WinPE has, and real-size WIMs
+            // overflow the RAM-backed X:\Temp. The local-WIM (offline) path
+            // doesn't strictly need partitioning first, but keeping a single
+            // order simplifies the orchestration and costs only a few seconds.
+            let partition = match imaging_engine::pipeline::prepare_target_disk(&request, &progress_tx).await {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = tx.send(NetworkEvent::PipelineError(format!("{e:#}")));
+                    let _ = forward_handle.await;
+                    return;
+                }
+            };
+
+            // If this provider needs a download, land the WIM on the Windows
+            // partition we just created, then point the apply at that file.
+            let (effective_request, cached_wim) = if let Some(ctx) = download_ctx {
+                // Windows path join doesn't add a separator between a drive
+                // spec ("W:") and a child, so build with format! -- "W:" +
+                // join("DeployStation") yields "W:DeployStation", not "W:\\...".
+                let cache_dir  = format!(r"{}\DeployStation", partition.windows_volume);
+                let cache_path = std::path::PathBuf::from(format!(r"{}\deploy.wim", cache_dir));
+                if let Err(e) = tokio::fs::create_dir_all(&cache_dir).await {
+                    let _ = tx.send(NetworkEvent::PipelineError(
+                        format!("Failed to create cache dir {cache_dir}: {e:#}")));
+                    let _ = forward_handle.await;
+                    return;
+                }
+                if let Err(e) = download_before_deploy(&ctx, &cache_path, tx.clone()).await {
                     let _ = tx.send(NetworkEvent::PipelineError(format!("Download failed: {e:#}")));
                     let _ = forward_handle.await;
                     return;
                 }
+                let req = imaging_engine::pipeline::DeployRequest {
+                    wim_path: cache_path.clone(),
+                    ..request
+                };
+                (req, Some(cache_path))
+            } else {
+                (request, None)
+            };
+
+            let apply_result = imaging_engine::pipeline::apply_and_configure(
+                &effective_request, &partition, &progress_tx,
+            ).await;
+
+            // Best-effort cleanup of the cached WIM. Leaving it on the Windows
+            // partition is harmless but wastes space; failing to delete it
+            // shouldn't fail the deploy, which has otherwise succeeded.
+            if let Some(path) = cached_wim {
+                if let Some(parent) = path.parent() {
+                    let _ = tokio::fs::remove_dir_all(parent).await;
+                }
             }
 
-            match imaging_engine::pipeline::run_deploy(request, progress_tx).await {
-                Ok(()) => {
-                    let _ = tx.send(NetworkEvent::PipelineComplete);
-                }
-                Err(e) => {
-                    let _ = tx.send(NetworkEvent::PipelineError(e.to_string()));
-                }
+            match apply_result {
+                Ok(()) => { let _ = tx.send(NetworkEvent::PipelineComplete); }
+                Err(e) => { let _ = tx.send(NetworkEvent::PipelineError(format!("{e:#}"))); }
             }
 
             let _ = forward_handle.await;
